@@ -1,0 +1,38 @@
+# Built Roblox places / models (regenerate with: rojo build)
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+
+# Rojo / toolchain
+sourcemap.json
+*.project.json.bak
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Local tooling / deps
+node_modules/
+.aftman/
+.rokit/
+Packages/
+ServerPackages/
+*.log
+*.tmp
+
+# Secrets / local env (never commit)
+.env
+.env.*
+*.pem
+*.key
+credentials.json
