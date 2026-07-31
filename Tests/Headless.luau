@@ -45,6 +45,10 @@ local ENVIRONMENT = {
 	NumberRange = roblox.NumberRange,
 }
 
+-- The environment above belongs to the loaded modules; this file needs its own
+-- handle on the constructors it uses to build test fixtures.
+local Vector3 = roblox.Vector3
+
 local function loadShared(name: string)
 	local path = "src/Shared/" .. name .. ".lua"
 	assert(fs.isFile(path), "Cannot find " .. path .. " -- run this from the repository root")
@@ -179,13 +183,15 @@ check("cframeAt lifts by the requested height", function()
 	assert(math.abs(cf.Position.Y - 5) < 0.001, "Expected a 5 stud lift, got " .. tostring(cf.Position.Y))
 end)
 
-check("cframeAt faces along the route", function()
-	-- A quarter of the way in the route runs +Z; three quarters in it runs +X.
-	local early = RouteMath.cframeAt(straightThenRight, 0.25, 0).LookVector
-	local late = RouteMath.cframeAt(straightThenRight, 0.75, 0).LookVector
-	assert(early.Z > 0.9, "First leg should face +Z, got " .. tostring(early))
-	assert(late.X > 0.9, "Second leg should face +X, got " .. tostring(late))
-end)
+--[[
+	Which way cframeAt faces is asserted in Tests/StudioSmoke.luau instead, not
+	because it needs the engine but because Lune gets it wrong: asked to look
+	towards +Z from the origin, Lune's CFrame.lookAt returns the identity
+	rotation, where Roblox returns a 180 degree yaw. The two disagree about
+	which axis lookAt aims, so an assertion here would be testing Lune rather
+	than RouteMath. Position is unaffected, so the round-trip and clamping
+	checks above are still honest.
+]]
 
 check("cframeAt clamps out-of-range progress", function()
 	local under = RouteMath.cframeAt(straightThenRight, -3, 0)

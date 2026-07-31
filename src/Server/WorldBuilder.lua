@@ -46,13 +46,7 @@ local HUB_Z = -46
 
 local WorldBuilder = {}
 
-local function makePart(
-	name: string,
-	size: Vector3,
-	cframe: CFrame,
-	color: Color3,
-	parent: Instance
-): Part
+local function makePart(name: string, size: Vector3, cframe: CFrame, color: Color3, parent: Instance): Part
 	local part = Instance.new("Part")
 	part.Name = name
 	part.Size = size
@@ -537,13 +531,8 @@ function WorldBuilder.buildLabRoute(): LabRouteInfo
 
 	local nodes = buildLabNodes()
 
-	local staging = makePart(
-		"StagingPad",
-		Vector3.new(60, 1, 46),
-		CFrame.new(0, 0, -22),
-		Color3.fromRGB(48, 50, 58),
-		root
-	)
+	local staging =
+		makePart("StagingPad", Vector3.new(60, 1, 46), CFrame.new(0, 0, -22), Color3.fromRGB(48, 50, 58), root)
 	staging.Material = Enum.Material.Concrete
 	staging:SetAttribute("LabSurface", "Road")
 
@@ -620,10 +609,7 @@ function WorldBuilder.buildLabRoute(): LabRouteInfo
 		points = points,
 		cumulative = cumulative,
 		totalLength = math.max(total, 1),
-		startCFrame = CFrame.lookAt(
-			Vector3.new(0, LAB_SPAWN_HEIGHT, -6),
-			Vector3.new(0, LAB_SPAWN_HEIGHT, 20)
-		),
+		startCFrame = CFrame.lookAt(Vector3.new(0, LAB_SPAWN_HEIGHT, -6), Vector3.new(0, LAB_SPAWN_HEIGHT, 20)),
 		deliveryPosition = deliveryPosition,
 		deliveryPad = deliveryPad,
 		cornerPosition = cornerPosition,

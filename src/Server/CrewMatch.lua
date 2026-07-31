@@ -151,11 +151,7 @@ function CrewMatch:_objective(): string
 	if phase == "Idle" then
 		return "Bay open — step on the pad to crew up"
 	elseif phase == "Staging" then
-		return string.format(
-			"Ready up (%d/%d) — departing automatically",
-			self:_countReady(),
-			#self.members
-		)
+		return string.format("Ready up (%d/%d) — departing automatically", self:_countReady(), #self.members)
 	elseif phase == "Departing" then
 		return "Rolling out in " .. tostring(self.countdownSeconds) .. "..."
 	elseif phase == "Run" then
@@ -166,11 +162,7 @@ function CrewMatch:_objective(): string
 	elseif phase == "DeliveryHold" then
 		return "DELIVERY HOLD — stop inside the glowing zone"
 	elseif phase == "BankOrPush" then
-		return string.format(
-			"Leg %d delivered. Bank %d credits, or push for more?",
-			self.leg,
-			self.carriedValue
-		)
+		return string.format("Leg %d delivered. Bank %d credits, or push for more?", self.leg, self.carriedValue)
 	elseif phase == "Resolve" then
 		if self.failReason == "Banked" then
 			return string.format("Banked %d credits after %d legs", self.carriedValue, self.leg)
@@ -220,11 +212,7 @@ function CrewMatch:buildSnapshot(player: Player?): Types.CrewSnapshot
 		leg = self.leg,
 		timeRemaining = math.max(0, math.ceil(self.timeRemaining)),
 		cargoStability = math.clamp(math.floor(self.cargoStability), 0, 100),
-		truckIntegrity = math.clamp(
-			math.floor(self.rig:getTruckIntegrity()),
-			0,
-			MatchConfig.MaxTruckIntegrity
-		),
+		truckIntegrity = math.clamp(math.floor(self.rig:getTruckIntegrity()), 0, MatchConfig.MaxTruckIntegrity),
 		cargoState = self.rig:getCargoState(),
 		routeProgress = math.floor(self.rig:getRouteProgress() * 100),
 		speed = math.floor(self.rig:getSpeed() * 2.2),
@@ -664,9 +652,7 @@ function CrewMatch:_handleCascade(def: Types.FailureDef)
 		end
 	end
 
-	local canChainToStrap = def.id == "SharpTurn"
-		and self.roles:hasRole("Strapper")
-		and self.cargoStability > 0
+	local canChainToStrap = def.id == "SharpTurn" and self.roles:hasRole("Strapper") and self.cargoStability > 0
 	if self:_isCargoFailure(def.id) then
 		self.rig:setCargoState(if self.cargoStability <= 0 then "Dumped" else "Tipping")
 	else
@@ -796,7 +782,8 @@ function CrewMatch:_runLeg()
 		end
 
 		local active = if self.failureRunner then self.failureRunner:getActive() else nil
-		if active
+		if
+			active
 			and not active.resolved
 			and not active.cascaded
 			and active.def.id == "SharpTurn"
@@ -805,7 +792,8 @@ function CrewMatch:_runLeg()
 			self.failureRunner:tryResolve("Driver")
 		end
 
-		if not self.randomFailuresStarted
+		if
+			not self.randomFailuresStarted
 			and self.cornerStage >= 3
 			and progress >= MatchConfig.RandomFailureStartProgress
 			and self.failureRunner
@@ -829,9 +817,7 @@ function CrewMatch:_runLeg()
 				self:_wipe("CargoDumped")
 				break
 			end
-		elseif self.rig:getCargoState() == "Tipping"
-			and (not active or not self:_isCargoFailure(active.def.id))
-		then
+		elseif self.rig:getCargoState() == "Tipping" and (not active or not self:_isCargoFailure(active.def.id)) then
 			local recovery = 3 + (self.roles:effectFor("Strapper").stabilityRecoveryBonus or 0)
 			self.cargoStability = math.min(100, self.cargoStability + recovery * dt)
 			if self.cargoStability >= 75 then
@@ -1099,12 +1085,7 @@ function CrewMatch:handleRoleAction(player: Player, action: string)
 	end
 	local roleId = self.roles:getRole(player)
 	local active = runner:getActive()
-	if not roleId
-		or not active
-		or active.resolved
-		or active.cascaded
-		or active.def.responsibleRole ~= roleId
-	then
+	if not roleId or not active or active.resolved or active.cascaded or active.def.responsibleRole ~= roleId then
 		return
 	end
 

@@ -97,13 +97,7 @@ local function makeLabel(parent: Instance, name: string, order: number, height: 
 	})
 end
 
-local function makeButton(
-	parent: Instance,
-	name: string,
-	text: string,
-	size: UDim2,
-	color: Color3
-): TextButton
+local function makeButton(parent: Instance, name: string, text: string, size: UDim2, color: Color3): TextButton
 	return UIKit.button({
 		Name = name,
 		Size = size,
@@ -137,11 +131,7 @@ end
 local function failReasonCopy(snapshot: Types.CrewSnapshot): string
 	local reason = snapshot.failReason
 	if reason == "Banked" then
-		return string.format(
-			"BANKED\n%d credits secured across %d legs.",
-			snapshot.carriedValue,
-			snapshot.leg
-		)
+		return string.format("BANKED\n%d credits secured across %d legs.", snapshot.carriedValue, snapshot.leg)
 	elseif reason == "TruckTotaled" then
 		return "TRUCK TOTALED\nIntegrity hit zero. The stack is gone."
 	elseif reason == "TimeExpired" then
@@ -163,12 +153,8 @@ local function refreshManifest(snapshot: Types.CrewSnapshot)
 	manifestFrame.Visible = true
 	manifestTitle.Text = string.upper(cargo.label)
 	manifestTitle.TextColor3 = CargoManifest.rarityColor(cargo.rarity)
-	manifestBody.Text = string.format(
-		"%s · x%.2f value\n%s",
-		string.upper(cargo.rarity),
-		cargo.valueMultiplier,
-		cargo.blurb
-	)
+	manifestBody.Text =
+		string.format("%s · x%.2f value\n%s", string.upper(cargo.rarity), cargo.valueMultiplier, cargo.blurb)
 end
 
 local function refresh()
@@ -198,12 +184,8 @@ local function refresh()
 	timerLabel.Text = tostring(snap.timeRemaining) .. "s"
 	cargoLabel.Text = "CARGO " .. tostring(snap.cargoStability) .. "% · " .. snap.cargoState
 	truckLabel.Text = "TRUCK " .. tostring(snap.truckIntegrity) .. "% integrity"
-	progressLabel.Text = string.format(
-		"ROUTE %d%% · %d mph · safe corner %d",
-		snap.routeProgress,
-		snap.speed,
-		snap.safeSpeed
-	)
+	progressLabel.Text =
+		string.format("ROUTE %d%% · %d mph · safe corner %d", snap.routeProgress, snap.speed, snap.safeSpeed)
 
 	local myRole = getMyRole(snap)
 	if spectating then
@@ -243,12 +225,7 @@ local function refresh()
 	endcardLabel.Visible = showEndcard
 	if showEndcard then
 		endcardLabel.Text = failReasonCopy(snap)
-			.. string.format(
-				"\nLegs %d · Survived %ds · Cascades %d",
-				snap.leg,
-				snap.timeSurvived,
-				snap.cascadeCount
-			)
+			.. string.format("\nLegs %d · Survived %ds · Cascades %d", snap.leg, snap.timeSurvived, snap.cascadeCount)
 	end
 
 	local staging = snap.phase == "Staging" and not spectating
@@ -257,9 +234,7 @@ local function refresh()
 	if staging then
 		local ready = amIReady(snap)
 		readyButton.Text = if ready then "UNREADY" else "READY"
-		readyButton.BackgroundColor3 = if ready
-			then Color3.fromRGB(180, 90, 50)
-			else Color3.fromRGB(40, 150, 95)
+		readyButton.BackgroundColor3 = if ready then Color3.fromRGB(180, 90, 50) else Color3.fromRGB(40, 150, 95)
 	end
 
 	newConvoyButton.Visible = snap.phase == "Resolve" and not spectating
@@ -268,17 +243,8 @@ local function refresh()
 	bankButton.Visible = deciding
 	pushButton.Visible = deciding
 	if deciding then
-		bankButton.Text = string.format(
-			"BANK %d cr  (%d)",
-			snap.carriedValue,
-			snap.bankVotes
-		)
-		pushButton.Text = string.format(
-			"PUSH LEG %d  (%d)  %ds",
-			snap.leg + 1,
-			snap.pushVotes,
-			snap.decisionSeconds
-		)
+		bankButton.Text = string.format("BANK %d cr  (%d)", snap.carriedValue, snap.bankVotes)
+		pushButton.Text = string.format("PUSH LEG %d  (%d)  %ds", snap.leg + 1, snap.pushVotes, snap.decisionSeconds)
 		bankButton.BackgroundTransparency = if snap.myVote == "Bank" then 0 else 0.35
 		pushButton.BackgroundTransparency = if snap.myVote == "Push" then 0 else 0.35
 	end
@@ -323,14 +289,16 @@ end
 
 local function bindHoldButton(button: TextButton, inputName: string)
 	button.InputBegan:Connect(function(input: InputObject)
-		if input.UserInputType == Enum.UserInputType.MouseButton1
+		if
+			input.UserInputType == Enum.UserInputType.MouseButton1
 			or input.UserInputType == Enum.UserInputType.Touch
 		then
 			setDriveTouch(inputName, true)
 		end
 	end)
 	button.InputEnded:Connect(function(input: InputObject)
-		if input.UserInputType == Enum.UserInputType.MouseButton1
+		if
+			input.UserInputType == Enum.UserInputType.MouseButton1
 			or input.UserInputType == Enum.UserInputType.Touch
 		then
 			setDriveTouch(inputName, false)
@@ -343,7 +311,7 @@ local function mountStatusPanel()
 		Name = "Status",
 		AnchorPoint = Vector2.new(0, 0),
 		Size = UDim2.new(1, -24, 0, 236),
-		Position = UDim2.new(0, 12, 0, 12),
+		Position = UDim2.fromOffset(12, 12),
 		BackgroundColor3 = Color3.fromRGB(20, 22, 28),
 		BackgroundTransparency = 0.12,
 		CornerRadius = 12,
@@ -535,23 +503,12 @@ local function mountMainButtons()
 	readyButton.AnchorPoint = Vector2.new(0.5, 1)
 	readyButton.Position = UDim2.new(0.5, 0, 1, -104)
 
-	startButton = makeButton(
-		gui,
-		"Start",
-		"ROLL OUT NOW",
-		UDim2.fromOffset(230, 52),
-		Color3.fromRGB(65, 120, 225)
-	)
+	startButton = makeButton(gui, "Start", "ROLL OUT NOW", UDim2.fromOffset(230, 52), Color3.fromRGB(65, 120, 225))
 	startButton.AnchorPoint = Vector2.new(0.5, 1)
 	startButton.Position = UDim2.new(0.5, 0, 1, -44)
 
-	newConvoyButton = makeButton(
-		gui,
-		"NewConvoy",
-		"NEW CONVOY",
-		UDim2.fromOffset(230, 52),
-		Color3.fromRGB(65, 120, 225)
-	)
+	newConvoyButton =
+		makeButton(gui, "NewConvoy", "NEW CONVOY", UDim2.fromOffset(230, 52), Color3.fromRGB(65, 120, 225))
 	newConvoyButton.AnchorPoint = Vector2.new(0.5, 1)
 	newConvoyButton.Position = UDim2.new(0.5, 0, 1, -44)
 
@@ -563,13 +520,7 @@ local function mountMainButtons()
 	pushButton.AnchorPoint = Vector2.new(0, 1)
 	pushButton.Position = UDim2.new(0.5, 8, 1, -44)
 
-	actionButton = makeButton(
-		gui,
-		"Action",
-		"HOLD TO FIX",
-		UDim2.new(1, -36, 0, 68),
-		Color3.fromRGB(230, 130, 40)
-	)
+	actionButton = makeButton(gui, "Action", "HOLD TO FIX", UDim2.new(1, -36, 0, 68), Color3.fromRGB(230, 130, 40))
 	actionButton.AnchorPoint = Vector2.new(0.5, 1)
 	actionButton.Position = UDim2.new(0.5, 0, 1, -110)
 
@@ -631,7 +582,8 @@ local function bindInputs()
 		if not active or active.interaction ~= "Hold" then
 			return
 		end
-		if input.UserInputType == Enum.UserInputType.MouseButton1
+		if
+			input.UserInputType == Enum.UserInputType.MouseButton1
 			or input.UserInputType == Enum.UserInputType.Touch
 		then
 			actionHolding = true
@@ -640,7 +592,8 @@ local function bindInputs()
 		end
 	end)
 	actionButton.InputEnded:Connect(function(input: InputObject)
-		if input.UserInputType == Enum.UserInputType.MouseButton1
+		if
+			input.UserInputType == Enum.UserInputType.MouseButton1
 			or input.UserInputType == Enum.UserInputType.Touch
 		then
 			stopActionHold()
@@ -664,10 +617,8 @@ local function bindInputs()
 		if not snap or snap.spectating or not isLivePhase(snap.phase) or getMyRole(snap) ~= "Driver" then
 			return
 		end
-		local throttle = (if keyForward or touchForward then 1 else 0)
-			- (if keyReverse or touchReverse then 1 else 0)
-		local steering = (if keyRight or touchRight then 1 else 0)
-			- (if keyLeft or touchLeft then 1 else 0)
+		local throttle = (if keyForward or touchForward then 1 else 0) - (if keyReverse or touchReverse then 1 else 0)
+		local steering = (if keyRight or touchRight then 1 else 0) - (if keyLeft or touchLeft then 1 else 0)
 		driveInputRemote:FireServer({
 			throttle = throttle,
 			steering = steering,

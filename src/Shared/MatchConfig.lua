@@ -70,14 +70,12 @@ local MatchConfig = {
 
 -- Deeper legs are shorter, which is what makes the push feel like a real bet.
 function MatchConfig.legDuration(leg: number): number
-	local decayed = MatchConfig.LegBaseDurationSeconds
-		- (math.max(1, leg) - 1) * MatchConfig.LegDurationDecayPerLeg
+	local decayed = MatchConfig.LegBaseDurationSeconds - (math.max(1, leg) - 1) * MatchConfig.LegDurationDecayPerLeg
 	return math.max(MatchConfig.LegMinDurationSeconds, decayed)
 end
 
 function MatchConfig.legPressure(leg: number): number
-	local pressure = MatchConfig.BaseFailurePressure
-		+ (math.max(1, leg) - 1) * MatchConfig.LegPressurePerLeg
+	local pressure = MatchConfig.BaseFailurePressure + (math.max(1, leg) - 1) * MatchConfig.LegPressurePerLeg
 	return math.min(MatchConfig.LegMaxPressure, pressure)
 end
 

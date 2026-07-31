@@ -322,11 +322,8 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 	end
 
 	local forwardSpeed = velocity:Dot(cf.LookVector)
-	local speedFactor = math.clamp(
-		1 - math.abs(forwardSpeed) / LabConfig.SteerSpeedFalloff,
-		LabConfig.MinSteerFactor,
-		1
-	)
+	local speedFactor =
+		math.clamp(1 - math.abs(forwardSpeed) / LabConfig.SteerSpeedFalloff, LabConfig.MinSteerFactor, 1)
 	local maxSteer = math.rad(LabConfig.MaxSteerAngleDeg) * speedFactor * self.steeringHealth
 	local targetSteer = math.clamp(input.steering, -1, 1) * maxSteer
 	local steerStep = math.rad(LabConfig.SteerRateDegPerSec) * dt
@@ -340,30 +337,19 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 	for _, id in WHEEL_ORDER do
 		local wheel = self.wheels[id]
 		local mountWorld = cf * wheel.offset
-		local result = workspace:Raycast(
-			mountWorld,
-			Vector3.new(0, -LabConfig.SuspensionRestLength, 0),
-			self.rayParams
-		)
+		local result = workspace:Raycast(mountWorld, Vector3.new(0, -LabConfig.SuspensionRestLength, 0), self.rayParams)
 
 		if result then
 			groundedCount += 1
 			local distance = (result.Position - mountWorld).Magnitude
-			local compression = math.clamp(
-				(LabConfig.SuspensionRestLength - distance) / LabConfig.SuspensionRestLength,
-				0,
-				1
-			)
+			local compression =
+				math.clamp((LabConfig.SuspensionRestLength - distance) / LabConfig.SuspensionRestLength, 0, 1)
 			local health = self.suspensionHealth[id] or 1
 			local normal = result.Normal
 			local pointVelocity = chassis:GetVelocityAtPosition(mountWorld)
 			local springVelocity = pointVelocity:Dot(normal)
 
-			local force = math.clamp(
-				stiffness * compression * health - damping * springVelocity,
-				0,
-				maxSpringForce
-			)
+			local force = math.clamp(stiffness * compression * health - damping * springVelocity, 0, maxSpringForce)
 			chassis:ApplyImpulseAtPosition(normal * force * dt, mountWorld)
 
 			local surfaceName = result.Instance:GetAttribute("LabSurface")
@@ -406,18 +392,11 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 				longitudinal = math.clamp(longitudinal, -gripBudget, gripBudget)
 			elseif wheel.drive and math.abs(input.throttle) > 0.05 then
 				local accelTarget = if input.throttle > 0 then LabConfig.EngineAccel else -LabConfig.ReverseAccel
-				local limit = if input.throttle > 0
-					then LabConfig.MaxForwardSpeed
-					else -LabConfig.MaxReverseSpeed
-				local overspeed = if input.throttle > 0
-					then forwardSpeed > limit
-					else forwardSpeed < limit
+				local limit = if input.throttle > 0 then LabConfig.MaxForwardSpeed else -LabConfig.MaxReverseSpeed
+				local overspeed = if input.throttle > 0 then forwardSpeed > limit else forwardSpeed < limit
 				if not overspeed then
-					longitudinal = math.clamp(
-						accelTarget * math.abs(input.throttle) * (mass / 2),
-						-gripBudget,
-						gripBudget
-					)
+					longitudinal =
+						math.clamp(accelTarget * math.abs(input.throttle) * (mass / 2), -gripBudget, gripBudget)
 				end
 			else
 				local along = pointVelocity:Dot(wheelForward)
@@ -445,7 +424,8 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 			wheel.compression = 0
 			wheel.normalForce = 0
 			wheel.surface = "Air"
-			wheel.part.CFrame = cf * CFrame.new(wheel.offset - Vector3.new(0, LabConfig.SuspensionRestLength * 0.7, 0))
+			wheel.part.CFrame = cf
+				* CFrame.new(wheel.offset - Vector3.new(0, LabConfig.SuspensionRestLength * 0.7, 0))
 				* CFrame.Angles(0, 0, math.rad(90))
 		end
 	end

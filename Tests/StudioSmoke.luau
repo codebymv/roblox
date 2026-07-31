@@ -39,6 +39,7 @@ local MatchConfig = require(shared:WaitForChild("MatchConfig"))
 local Net = require(shared:WaitForChild("Net"))
 local RoleKits = require(shared:WaitForChild("RoleKits"))
 local Roles = require(shared:WaitForChild("Roles"))
+local RouteMath = require(shared:WaitForChild("RouteMath"))
 local TuningSchema = require(shared:WaitForChild("TuningSchema"))
 
 local EconomyService = require(server:WaitForChild("EconomyService"))
@@ -66,6 +67,20 @@ local function checkShared()
 	for _, name in pairs(Net.Names) do
 		assert(remotes:FindFirstChild(name), "Missing remote: " .. name)
 	end
+
+	-- Route facing -------------------------------------------------------
+	-- The rest of RouteMath is covered headlessly. This assertion is not,
+	-- because Lune's CFrame.lookAt aims the opposite axis to Roblox's, so only
+	-- the engine can answer whether a warp faces down the route or back up it.
+	local route = {
+		points = { Vector3.new(0, 0, 0), Vector3.new(0, 0, 100), Vector3.new(100, 0, 100) },
+		cumulative = { 0, 100, 200 },
+		totalLength = 200,
+	}
+	local early = RouteMath.cframeAt(route, 0.25, 0).LookVector
+	local late = RouteMath.cframeAt(route, 0.75, 0).LookVector
+	assert(early.Z > 0.9, "First leg should face +Z, got " .. tostring(early))
+	assert(late.X > 0.9, "Second leg should face +X, got " .. tostring(late))
 
 	-- Rate limiter -------------------------------------------------------
 	-- The bucket arithmetic is covered headlessly. What needs the engine is

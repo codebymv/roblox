@@ -384,10 +384,7 @@ function LabSession:enterRun()
 		the first corner has something to find. Nothing about the outcome is
 		scripted: brake early and it holds.
 	]]
-	self.cargoLoad:weakenStrap(
-		LabConfig.OpeningWeakStrap,
-		LabConfig.StrapMaxHealth - LabConfig.OpeningWeakHealth
-	)
+	self.cargoLoad:weakenStrap(LabConfig.OpeningWeakStrap, LabConfig.StrapMaxHealth - LabConfig.OpeningWeakHealth)
 	self.telemetry:log("opening_weak_strap", LabConfig.OpeningWeakStrap)
 	self:toast("Rolling. " .. LabConfig.OpeningWeakStrap .. " strap went on tired.")
 end
@@ -402,7 +399,8 @@ function LabSession:enterResult(result: string, saved: boolean)
 	self.crateSaved = saved
 	self.restartSeconds = LabConfig.ResultDisplaySeconds
 
-	local headline = if result == "Delivered" then "Clean delivery."
+	local headline = if result == "Delivered"
+		then "Clean delivery."
 		elseif result == "PartialLoss" then "Delivered, but the load took a beating."
 		elseif result == "CargoLost" then "You lost the load."
 		elseif result == "TruckWrecked" then "Truck is finished."
@@ -430,10 +428,7 @@ function LabSession:_evaluateDelivery()
 
 	if self.cargoLoad.condition == "Lost" then
 		self:enterResult("CargoLost", false)
-	elseif broken > 0
-		or self.cargoLoad.offset > LabConfig.SlidingOffset
-		or self.cargoLoad.readout < 62
-	then
+	elseif broken > 0 or self.cargoLoad.offset > LabConfig.SlidingOffset or self.cargoLoad.readout < 62 then
 		self:enterResult("PartialLoss", true)
 	else
 		self:enterResult("Delivered", true)

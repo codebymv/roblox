@@ -5,22 +5,9 @@
 	DepotSnapshot; the server is the only writer of both.
 ]]
 
-export type CrewPhase =
-	"Idle"
-	| "Staging"
-	| "Departing"
-	| "Run"
-	| "DeliveryHold"
-	| "BankOrPush"
-	| "Resolve"
+export type CrewPhase = "Idle" | "Staging" | "Departing" | "Run" | "DeliveryHold" | "BankOrPush" | "Resolve"
 
-export type FailReason =
-	"Banked"
-	| "Delivered"
-	| "CargoDumped"
-	| "TruckTotaled"
-	| "TimeExpired"
-	| "CrewLeft"
+export type FailReason = "Banked" | "Delivered" | "CargoDumped" | "TruckTotaled" | "TimeExpired" | "CrewLeft"
 
 export type RoleId = "Driver" | "Strapper" | "Spotter" | "Repair"
 

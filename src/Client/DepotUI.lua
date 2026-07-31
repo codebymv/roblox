@@ -140,12 +140,8 @@ local function refreshHeader(snap: Types.DepotSnapshot)
 		snap.journalCount,
 		snap.journalTotal
 	)
-	eventLabel.Text = string.format(
-		"%s  ·  payouts x%.2f\n%s",
-		snap.eventLabel,
-		snap.payoutMultiplier,
-		snap.eventBlurb
-	)
+	eventLabel.Text =
+		string.format("%s  ·  payouts x%.2f\n%s", snap.eventLabel, snap.payoutMultiplier, snap.eventBlurb)
 
 	dailyButton.Visible = snap.dailyBonusReady
 	dailyButton.Text = string.format("CLAIM DAILY DISPATCH BONUS (+%d)", snap.dailyBonusAmount)
@@ -167,20 +163,15 @@ local function refreshBays(snap: Types.DepotSnapshot)
 		if status.cargoLabel then
 			detail ..= " · " .. status.cargoLabel
 		end
-		row.label.Text = string.format(
-			"BAY %d (%d/%d)  %s\n%s",
-			status.index,
-			status.memberCount,
-			status.capacity,
-			detail,
-			roster
-		)
+		row.label.Text =
+			string.format("BAY %d (%d/%d)  %s\n%s", status.index, status.memberCount, status.capacity, detail, roster)
 
 		row.button.Visible = true
 		if snap.myBay == index then
 			row.button.Text = "LEAVE"
 			row.button.BackgroundColor3 = Color3.fromRGB(180, 80, 60)
-		elseif status.memberCount >= status.capacity
+		elseif
+			status.memberCount >= status.capacity
 			or (status.phase ~= "Idle" and status.phase ~= "Staging" and status.phase ~= "Resolve")
 		then
 			row.button.Text = "WATCH"
@@ -244,9 +235,7 @@ end
 local function refreshStandings(snap: Types.DepotSnapshot)
 	for index, label in streakRows do
 		local row = snap.topStreak[index]
-		label.Text = if row
-			then string.format("  %d. %s — %d (%s)", index, row.name, row.value, row.detail)
-			else ""
+		label.Text = if row then string.format("  %d. %s — %d (%s)", index, row.name, row.value, row.detail) else ""
 	end
 	for index, label in haulRows do
 		local row = snap.topHaul[index]
@@ -366,8 +355,7 @@ local function buildPanel()
 		kitRows[kit.id] = row
 		row.button.Activated:Connect(function()
 			local snap = latest
-			local owned = RoleKits.isStarterKit(kit.id)
-				or (snap ~= nil and snap.unlockedKits[kit.id] == true)
+			local owned = RoleKits.isStarterKit(kit.id) or (snap ~= nil and snap.unlockedKits[kit.id] == true)
 			if owned then
 				requestEquipRemote:FireServer({ kind = "Kit", id = kit.id })
 			else

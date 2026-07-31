@@ -293,10 +293,7 @@ function CargoLoad:step(dt: number)
 		elseif tension < LabConfig.StrapTensionThreshold * 0.5 then
 			-- Slow passive recovery, capped well below full so the crew is
 			-- still the only way to get a strap properly secure again.
-			strap.health = math.min(
-				LabConfig.StrapMaxHealth * 0.7,
-				strap.health + LabConfig.StrapRecoverRate * dt
-			)
+			strap.health = math.min(LabConfig.StrapMaxHealth * 0.7, strap.health + LabConfig.StrapRecoverRate * dt)
 		end
 
 		if strap.rope then
@@ -334,11 +331,7 @@ function CargoLoad:_updateCondition(dt: number, bodyCF: CFrame)
 	-- Is the load physically scraping the ground?
 	local down = Vector3.new(0, -(LabConfig.CrateSize.Y * 0.5 + 0.8), 0)
 	local hit = workspace:Raycast(crate.Position, down, self.dragRayParams)
-	local horizontalSpeed = Vector3.new(
-		crate.AssemblyLinearVelocity.X,
-		0,
-		crate.AssemblyLinearVelocity.Z
-	).Magnitude
+	local horizontalSpeed = Vector3.new(crate.AssemblyLinearVelocity.X, 0, crate.AssemblyLinearVelocity.Z).Magnitude
 	self.dragging = hit ~= nil and self.offset > LabConfig.ShiftedOffset and horizontalSpeed > 3
 
 	if self.dragging then
@@ -349,8 +342,7 @@ function CargoLoad:_updateCondition(dt: number, bodyCF: CFrame)
 	end
 
 	local separation = (crate.Position - bodyCF.Position).Magnitude
-	self.lost = (brokenCount >= #LabConfig.StrapOrder and self.offset > LabConfig.LostOffset)
-		or separation > 34
+	self.lost = (brokenCount >= #LabConfig.StrapOrder and self.offset > LabConfig.LostOffset) or separation > 34
 
 	local condition: LabTypes.CargoCondition
 	if self.lost then

@@ -105,7 +105,13 @@ end
 	enough to answer "was the driver hard on the brakes before that strap
 	went?" after the fact.
 ]]
-function LabTelemetry:noteDriveSample(throttle: number, steering: number, braking: boolean, speed: number, progress: number)
+function LabTelemetry:noteDriveSample(
+	throttle: number,
+	steering: number,
+	braking: boolean,
+	speed: number,
+	progress: number
+)
 	if not DevConfig.Telemetry or #self.inputSamples >= MAX_INPUT_SAMPLES then
 		return
 	end
@@ -277,12 +283,14 @@ function LabTelemetry:_writeArtifact(outcome: string, crateSaved: boolean, durat
 	value.Value = encoded
 	value.Parent = folder
 
-	print(string.format(
-		"[CargoLab] run artifact written to ServerStorage.%s.%s (%d bytes)",
-		ARTIFACT_FOLDER,
-		value.Name,
-		#encoded
-	))
+	print(
+		string.format(
+			"[CargoLab] run artifact written to ServerStorage.%s.%s (%d bytes)",
+			ARTIFACT_FOLDER,
+			value.Name,
+			#encoded
+		)
+	)
 end
 
 function LabTelemetry:finish(outcome: string, crateSaved: boolean)
@@ -298,9 +306,18 @@ function LabTelemetry:finish(outcome: string, crateSaved: boolean)
 		"===== CARGO LAB RUN =====",
 		string.format("outcome            %s (crate saved: %s)", outcome, tostring(crateSaved)),
 		string.format("duration           %.1fs", duration),
-		string.format("time to input      %s", self.firstInputAt and string.format("%.1fs", self.firstInputAt) or "never"),
-		string.format("time to movement   %s", self.firstMovementAt and string.format("%.1fs", self.firstMovementAt) or "never"),
-		string.format("time to crisis     %s", self.firstCrisisAt and string.format("%.1fs", self.firstCrisisAt) or "never"),
+		string.format(
+			"time to input      %s",
+			self.firstInputAt and string.format("%.1fs", self.firstInputAt) or "never"
+		),
+		string.format(
+			"time to movement   %s",
+			self.firstMovementAt and string.format("%.1fs", self.firstMovementAt) or "never"
+		),
+		string.format(
+			"time to crisis     %s",
+			self.firstCrisisAt and string.format("%.1fs", self.firstCrisisAt) or "never"
+		),
 		string.format("worst condition    %s", self.worstCondition),
 		string.format("cargo transitions  %d (%d recoveries)", self.conditionChanges, self.recoveries),
 		string.format("straps             %d broken, %d refitted", self.strapBreaks, self.strapRefits),

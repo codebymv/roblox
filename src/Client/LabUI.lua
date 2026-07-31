@@ -137,22 +137,16 @@ local function buildStrapPanel(parent: Instance)
 		local tension = UIKit.frame({
 			Name = "Tension",
 			AnchorPoint = Vector2.new(0, 1),
-			Position = UDim2.new(0, 0, 1, 0),
-			Size = UDim2.new(0, 0, 0, 4),
+			Position = UDim2.fromScale(0, 1),
+			-- Width is driven by tension each refresh; this is the resting state.
+			Size = UDim2.fromOffset(0, 4),
 			BackgroundColor3 = Color3.fromRGB(255, 235, 120),
 			ZIndex = 2,
 			Parent = track,
 		})
 
-		local status = label(
-			row,
-			"Status",
-			UDim2.fromOffset(158, 0),
-			UDim2.fromOffset(60, 26),
-			"",
-			13,
-			Enum.Font.GothamMedium
-		)
+		local status =
+			label(row, "Status", UDim2.fromOffset(158, 0), UDim2.fromOffset(60, 26), "", 13, Enum.Font.GothamMedium)
 
 		strapRows[id] = { row = row, tag = tag, fill = fill, tension = tension, status = status }
 	end
@@ -186,9 +180,7 @@ local function buildControls(parent: Instance)
 		end
 		working = state
 		LabRemotes.fireServer(Net.Names.LabWork, state)
-		workButton.BackgroundColor3 = if state
-			then Color3.fromRGB(95, 180, 110)
-			else UIKit.Theme.Positive
+		workButton.BackgroundColor3 = if state then Color3.fromRGB(95, 180, 110) else UIKit.Theme.Positive
 	end
 
 	UIKit.bindHold(workButton, setWorking)
@@ -238,7 +230,8 @@ local function build()
 	gui = UIKit.screen("CargoLabHUD", player:WaitForChild("PlayerGui"))
 
 	local status = panel(gui, "Status", UDim2.fromOffset(16, 16), UDim2.fromOffset(300, 128))
-	speedLabel = label(status, "Speed", UDim2.fromOffset(12, 8), UDim2.new(1, -24, 0, 30), "0", 28, Enum.Font.GothamBlack)
+	speedLabel =
+		label(status, "Speed", UDim2.fromOffset(12, 8), UDim2.new(1, -24, 0, 30), "0", 28, Enum.Font.GothamBlack)
 	conditionLabel = label(
 		status,
 		"Condition",
@@ -248,61 +241,26 @@ local function build()
 		19,
 		Enum.Font.GothamBlack
 	)
-	readoutLabel = label(
-		status,
-		"Readout",
-		UDim2.fromOffset(12, 66),
-		UDim2.new(1, -24, 0, 18),
-		"",
-		14,
-		Enum.Font.GothamMedium
-	)
+	readoutLabel =
+		label(status, "Readout", UDim2.fromOffset(12, 66), UDim2.new(1, -24, 0, 18), "", 14, Enum.Font.GothamMedium)
 	readoutLabel.TextColor3 = UIKit.Theme.Muted
-	integrityLabel = label(
-		status,
-		"Integrity",
-		UDim2.fromOffset(12, 86),
-		UDim2.new(1, -24, 0, 18),
-		"",
-		14,
-		Enum.Font.GothamMedium
-	)
+	integrityLabel =
+		label(status, "Integrity", UDim2.fromOffset(12, 86), UDim2.new(1, -24, 0, 18), "", 14, Enum.Font.GothamMedium)
 	integrityLabel.TextColor3 = UIKit.Theme.Muted
-	timeLabel = label(
-		status,
-		"Time",
-		UDim2.fromOffset(12, 104),
-		UDim2.new(1, -24, 0, 18),
-		"",
-		13,
-		Enum.Font.GothamMedium
-	)
+	timeLabel =
+		label(status, "Time", UDim2.fromOffset(12, 104), UDim2.new(1, -24, 0, 18), "", 13, Enum.Font.GothamMedium)
 	timeLabel.TextColor3 = UIKit.Theme.Dim
 
 	local brief = panel(gui, "Brief", UDim2.new(0.5, -260, 0, 16), UDim2.fromOffset(520, 66))
-	objectiveLabel = label(
-		brief,
-		"Objective",
-		UDim2.fromOffset(14, 8),
-		UDim2.new(1, -28, 0, 24),
-		"",
-		18,
-		Enum.Font.GothamBold
-	)
+	objectiveLabel =
+		label(brief, "Objective", UDim2.fromOffset(14, 8), UDim2.new(1, -28, 0, 24), "", 18, Enum.Font.GothamBold)
 	objectiveLabel.TextXAlignment = Enum.TextXAlignment.Center
 	hintLabel = label(brief, "Hint", UDim2.fromOffset(14, 34), UDim2.new(1, -28, 0, 22), "", 14, Enum.Font.GothamMedium)
 	hintLabel.TextXAlignment = Enum.TextXAlignment.Center
 	hintLabel.TextColor3 = UIKit.Theme.Muted
 
-	toastLabel = label(
-		gui,
-		"Toast",
-		UDim2.new(0.5, -300, 0, 92),
-		UDim2.fromOffset(600, 26),
-		"",
-		17,
-		Enum.Font.GothamBold
-	)
+	toastLabel =
+		label(gui, "Toast", UDim2.new(0.5, -300, 0, 92), UDim2.fromOffset(600, 26), "", 17, Enum.Font.GothamBold)
 	toastLabel.TextXAlignment = Enum.TextXAlignment.Center
 	toastLabel.TextColor3 = UIKit.Theme.Accent
 	toastLabel.TextStrokeTransparency = 0.5
@@ -310,25 +268,11 @@ local function build()
 	resultFrame = panel(gui, "Result", UDim2.new(0.5, -220, 0.5, -70), UDim2.fromOffset(440, 128))
 	resultFrame.BackgroundTransparency = 0.08
 	resultFrame.Visible = false
-	resultTitle = label(
-		resultFrame,
-		"Title",
-		UDim2.fromOffset(0, 22),
-		UDim2.new(1, 0, 0, 36),
-		"",
-		30,
-		Enum.Font.GothamBlack
-	)
+	resultTitle =
+		label(resultFrame, "Title", UDim2.fromOffset(0, 22), UDim2.new(1, 0, 0, 36), "", 30, Enum.Font.GothamBlack)
 	resultTitle.TextXAlignment = Enum.TextXAlignment.Center
-	resultDetail = label(
-		resultFrame,
-		"Detail",
-		UDim2.fromOffset(0, 64),
-		UDim2.new(1, 0, 0, 46),
-		"",
-		16,
-		Enum.Font.GothamMedium
-	)
+	resultDetail =
+		label(resultFrame, "Detail", UDim2.fromOffset(0, 64), UDim2.new(1, 0, 0, 46), "", 16, Enum.Font.GothamMedium)
 	resultDetail.TextXAlignment = Enum.TextXAlignment.Center
 	resultDetail.TextWrapped = true
 
@@ -408,10 +352,7 @@ local function refresh()
 				else UIKit.Theme.Bad
 		)
 
-		UIKit.setSize(
-			row.tension,
-			UDim2.fromScale(math.clamp(entry.tension / 2.5, 0, 1), 0) + UDim2.fromOffset(0, 4)
-		)
+		UIKit.setSize(row.tension, UDim2.fromScale(math.clamp(entry.tension / 2.5, 0, 1), 0) + UDim2.fromOffset(0, 4))
 
 		if entry.broken then
 			UIKit.setText(row.status, if entry.reattachable then "REFIT" else "GONE")
@@ -613,8 +554,7 @@ function LabUI.mount()
 		end
 
 		LabRemotes.fireServer(Net.Names.LabDrive, {
-			throttle = (if keyForward or touchForward then 1 else 0)
-				- (if keyReverse or touchReverse then 1 else 0),
+			throttle = (if keyForward or touchForward then 1 else 0) - (if keyReverse or touchReverse then 1 else 0),
 			steering = (if keyRight or touchRight then 1 else 0) - (if keyLeft or touchLeft then 1 else 0),
 			braking = keyBrake or touchBrake,
 		})

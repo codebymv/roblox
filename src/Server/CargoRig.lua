@@ -26,13 +26,7 @@ export type CargoState = "Stable" | "Tipping" | "Dumped"
 local STABLE_STRAP = Color3.fromRGB(65, 150, 235)
 local LOOSE_STRAP = Color3.fromRGB(240, 65, 50)
 
-local function makePart(
-	name: string,
-	size: Vector3,
-	cframe: CFrame,
-	color: Color3,
-	parent: Instance
-): Part
+local function makePart(name: string, size: Vector3, cframe: CFrame, color: Color3, parent: Instance): Part
 	local part = WorldBuilder.makePart(name, size, cframe, color, parent)
 	part.CanCollide = false
 	part.CanQuery = false
@@ -65,13 +59,7 @@ function CargoRig:_build()
 	local base = CFrame.new(self.lane.startPosition)
 
 	local body = makePart("Body", Vector3.new(9, 3, 16), base, Color3.fromRGB(63, 70, 78), model)
-	local cab = makePart(
-		"Cab",
-		Vector3.new(8.5, 5.5, 6),
-		body.CFrame * CFrame.new(0, 3.6, 4.5),
-		self.paintColor,
-		model
-	)
+	local cab = makePart("Cab", Vector3.new(8.5, 5.5, 6), body.CFrame * CFrame.new(0, 3.6, 4.5), self.paintColor, model)
 	local windshield = makePart(
 		"Windshield",
 		Vector3.new(7, 2.3, 0.3),
@@ -82,13 +70,7 @@ function CargoRig:_build()
 	windshield.Material = Enum.Material.Glass
 	windshield.Transparency = 0.25
 
-	makePart(
-		"Bed",
-		Vector3.new(8.5, 0.8, 9),
-		body.CFrame * CFrame.new(0, 2.1, -3),
-		Color3.fromRGB(28, 30, 34),
-		model
-	)
+	makePart("Bed", Vector3.new(8.5, 0.8, 9), body.CFrame * CFrame.new(0, 2.1, -3), Color3.fromRGB(28, 30, 34), model)
 
 	local crate = makePart(
 		"Cargo",
@@ -277,9 +259,7 @@ end
 
 function CargoRig:setFaultActive(isActive: boolean)
 	if self.faultLight then
-		self.faultLight.Color = if isActive
-			then Color3.fromRGB(255, 60, 45)
-			else Color3.fromRGB(65, 220, 100)
+		self.faultLight.Color = if isActive then Color3.fromRGB(255, 60, 45) else Color3.fromRGB(65, 220, 100)
 	end
 end
 
@@ -297,23 +277,13 @@ function CargoRig:setDeliveryCue(isActive: boolean)
 end
 
 function CargoRig:applyTruckDamage(amount: number): number
-	self.truckIntegrity = math.clamp(
-		self.truckIntegrity - math.max(0, amount),
-		0,
-		MatchConfig.MaxTruckIntegrity
-	)
-	self:setFaultActive(
-		self.truckIntegrity < MatchConfig.MaxTruckIntegrity - MatchConfig.RepairDamageThreshold
-	)
+	self.truckIntegrity = math.clamp(self.truckIntegrity - math.max(0, amount), 0, MatchConfig.MaxTruckIntegrity)
+	self:setFaultActive(self.truckIntegrity < MatchConfig.MaxTruckIntegrity - MatchConfig.RepairDamageThreshold)
 	return self.truckIntegrity
 end
 
 function CargoRig:repairTruck(amount: number): number
-	self.truckIntegrity = math.clamp(
-		self.truckIntegrity + math.max(0, amount),
-		0,
-		MatchConfig.MaxTruckIntegrity
-	)
+	self.truckIntegrity = math.clamp(self.truckIntegrity + math.max(0, amount), 0, MatchConfig.MaxTruckIntegrity)
 	if self.truckIntegrity >= MatchConfig.MaxTruckIntegrity - MatchConfig.RepairDamageThreshold then
 		self:setFaultActive(false)
 	end
@@ -349,11 +319,7 @@ function CargoRig:step(dt: number, throttle: number, steering: number, braking: 
 	local speedRatio = math.clamp(math.abs(self.speed) / MatchConfig.MaxTruckSpeed, 0, 1)
 	if math.abs(self.speed) > 0.25 then
 		local directionSign = if self.speed >= 0 then 1 else -1
-		self.heading += clampedSteering
-			* math.rad(66)
-			* safeDt
-			* (0.25 + speedRatio * 0.75)
-			* directionSign
+		self.heading += clampedSteering * math.rad(66) * safeDt * (0.25 + speedRatio * 0.75) * directionSign
 	end
 
 	local forward = Vector3.new(math.sin(self.heading), 0, math.cos(self.heading))

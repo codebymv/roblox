@@ -245,11 +245,7 @@ end
 
 local function updateBoard()
 	local event = LiveOps.getActive()
-	world.eventLabel.Text = string.format(
-		"%s  ·  payouts x%.2f",
-		event.label,
-		event.payoutMultiplier
-	)
+	world.eventLabel.Text = string.format("%s  ·  payouts x%.2f", event.label, event.payoutMultiplier)
 
 	local lines: { string } = { "LONGEST ACTIVE STREAK" }
 	local streaks = sortedRows(function(data)
@@ -396,9 +392,7 @@ local function bindRemotes()
 		if not crew then
 			return
 		end
-		local flag = if typeof(isReady) == "boolean"
-			then isReady
-			else not crew.readyPlayers[player.UserId]
+		local flag = if typeof(isReady) == "boolean" then isReady else not crew.readyPlayers[player.UserId]
 		crew:setReady(player, flag)
 	end)
 
@@ -555,13 +549,7 @@ function DepotService.init()
 		end
 	end)
 
-	print(
-		string.format(
-			"[CargoCatastrophe] Depot online — %d bays, event: %s",
-			#crews,
-			LiveOps.getActive().label
-		)
-	)
+	print(string.format("[CargoCatastrophe] Depot online — %d bays, event: %s", #crews, LiveOps.getActive().label))
 end
 
 function DepotService.getCrewFor(player: Player): any?

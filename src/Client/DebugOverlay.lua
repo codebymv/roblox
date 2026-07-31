@@ -109,12 +109,7 @@ function DebugOverlay.mount()
 		end
 
 		local lines = {
-			string.format(
-				"load  x %+.2f  y %+.2f  z %+.2f",
-				snap.loadLocalX,
-				snap.loadLocalY,
-				snap.loadLocalZ
-			),
+			string.format("load  x %+.2f  y %+.2f  z %+.2f", snap.loadLocalX, snap.loadLocalY, snap.loadLocalZ),
 			string.format(
 				"accel lat %+4d  long %+4d   roll %+3d  pitch %+3d",
 				snap.lateralAccel,

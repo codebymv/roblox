@@ -104,11 +104,13 @@ local function onAttributeChanged(entry: TuningSchema.Entry)
 		print(string.format("[Tuning] %s = %s", entry.path, formatValue(entry.kind, value)))
 	else
 		buildDirty = true
-		print(string.format(
-			"[Tuning] %s = %s (build-time, rebuild the rig to apply)",
-			entry.path,
-			formatValue(entry.kind, value)
-		))
+		print(
+			string.format(
+				"[Tuning] %s = %s (build-time, rebuild the rig to apply)",
+				entry.path,
+				formatValue(entry.kind, value)
+			)
+		)
 	end
 end
 
@@ -130,12 +132,15 @@ function TuningService.dump(): string
 				table.insert(lines, "-- " .. group)
 			end
 			changed += 1
-			table.insert(lines, string.format(
-				"  %s = %s,   -- was %s",
-				entry.path,
-				formatValue(entry.kind, current),
-				formatValue(entry.kind, original)
-			))
+			table.insert(
+				lines,
+				string.format(
+					"  %s = %s,   -- was %s",
+					entry.path,
+					formatValue(entry.kind, current),
+					formatValue(entry.kind, original)
+				)
+			)
 		end
 	end
 
@@ -251,11 +256,13 @@ function TuningService.init()
 		applying = false
 	end)
 
-	print(string.format(
-		"[Tuning] live tuning on %d values. Edit ReplicatedStorage.%s attributes in the Explorer.",
-		#TuningSchema.Entries,
-		FOLDER_NAME
-	))
+	print(
+		string.format(
+			"[Tuning] live tuning on %d values. Edit ReplicatedStorage.%s attributes in the Explorer.",
+			#TuningSchema.Entries,
+			FOLDER_NAME
+		)
+	)
 end
 
 return TuningService

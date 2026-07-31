@@ -210,10 +210,7 @@ function StrapperStations:requestMove(player: Player, target: string): (boolean,
 	slot.travelFrom = fromCF
 	slot.travelTo = toCF
 	slot.travelElapsed = 0
-	slot.travelDuration = math.max(
-		LabConfig.TraversalMinSeconds,
-		distance * LabConfig.TraversalSecondsPerStud
-	)
+	slot.travelDuration = math.max(LabConfig.TraversalMinSeconds, distance * LabConfig.TraversalSecondsPerStud)
 	slot.movingTo = target
 	slot.station = nil
 	slot.working = false
@@ -264,9 +261,7 @@ function StrapperStations:_throw(slot)
 	end
 	if root and root:IsA("BasePart") then
 		local away = chassis.CFrame.RightVector * (if math.random() > 0.5 then 1 else -1)
-		root.AssemblyLinearVelocity = chassis.AssemblyLinearVelocity * 0.6
-			+ away * 26
-			+ Vector3.new(0, 22, 0)
+		root.AssemblyLinearVelocity = chassis.AssemblyLinearVelocity * 0.6 + away * 26 + Vector3.new(0, 22, 0)
 	end
 end
 
