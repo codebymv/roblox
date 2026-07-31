@@ -168,7 +168,9 @@ function CargoManifest.count(): number
 end
 
 function CargoManifest.rarityColor(rarity: Types.CargoRarity): Color3
-	return RARITY_COLOR[rarity] or RARITY_COLOR.Standard
+	-- Bracketed, because a table declared with a union-keyed indexer does not
+	-- accept dot access on one of its keys.
+	return RARITY_COLOR[rarity] or RARITY_COLOR["Standard"]
 end
 
 function CargoManifest.crateColor(id: string): Color3

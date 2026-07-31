@@ -187,7 +187,7 @@ local function refresh()
 	progressLabel.Text =
 		string.format("ROUTE %d%% · %d mph · safe corner %d", snap.routeProgress, snap.speed, snap.safeSpeed)
 
-	local myRole = getMyRole(snap)
+	local myRole: Types.RoleId? = getMyRole(snap)
 	if spectating then
 		roleLabel.Text = "Spectating — " .. table.concat(snap.members, ", ")
 	elseif myRole then

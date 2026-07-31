@@ -431,16 +431,21 @@ function CrewMatch:_beginDeparture()
 
 	self:_setPhase("Departing")
 	self.countdownThread = task.spawn(function()
+		-- The guard at the top of this function narrowed self.phase to
+		-- "Staging", and Luau does not see _setPhase widening it again, so the
+		-- countdown reads it back through an annotated local.
 		for remaining = MatchConfig.DepartCountdownSeconds, 1, -1 do
 			self.countdownSeconds = remaining
 			self:replicate()
 			task.wait(1)
-			if self.phase ~= "Departing" then
+			local current: Types.CrewPhase = self.phase
+			if current ~= "Departing" then
 				return
 			end
 		end
 		self.countdownSeconds = 0
-		if self.phase == "Departing" then
+		local current: Types.CrewPhase = self.phase
+		if current == "Departing" then
 			self:_startConvoy()
 		end
 	end)

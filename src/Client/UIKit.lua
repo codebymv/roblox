@@ -145,15 +145,20 @@ function UIKit.set(instance: Instance, property: string, value: any)
 	end
 end
 
-function UIKit.setText(element: TextLabel | TextButton, text: string)
+-- Luau reads a property off a union happily but refuses to write one, so the
+-- two text setters below cast on assignment. The read side stays typed, which
+-- is where a wrong element type would actually show up.
+export type TextElement = TextLabel | TextButton
+
+function UIKit.setText(element: TextElement, text: string)
 	if element.Text ~= text then
-		element.Text = text
+		(element :: any).Text = text
 	end
 end
 
-function UIKit.setTextColor(element: TextLabel | TextButton, color: Color3)
+function UIKit.setTextColor(element: TextElement, color: Color3)
 	if element.TextColor3 ~= color then
-		element.TextColor3 = color
+		(element :: any).TextColor3 = color
 	end
 end
 

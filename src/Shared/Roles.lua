@@ -50,7 +50,7 @@ end
 
 function Roles.assign(playerCount: number): { Types.RoleId }
 	local count = math.clamp(playerCount, 1, #ORDER)
-	local assigned = table.create(count)
+	local assigned: { Types.RoleId } = table.create(count)
 	for i = 1, count do
 		assigned[i] = ORDER[i]
 	end

@@ -626,22 +626,22 @@ function WorldBuilder.buildLabRoute(): LabRouteInfo
 		Each is placed a little before the feature it names, so warping there
 		gives you the approach rather than dropping you mid-event.
 	]]
-	local markers = {
-		{ "Start", nodes[1].position },
-		{ "CornerApproach", Vector3.new(0, 0, LAB_CORNER_Z - 130) },
-		{ "BlindRight", cornerPosition },
-		{ "Descent", Vector3.new(430, -12, 644) },
-		{ "Rough", Vector3.new(1320, -128, 822) },
-		{ "LeftBend", Vector3.new(1700, -136, 1120) },
-		{ "Bridge", Vector3.new(1700, -136, 1182) },
-		{ "Climb", Vector3.new(1622, -102, 1700) },
-		{ "SBends", Vector3.new(1784, -88, 1902) },
-		{ "Depot", deliveryPosition },
+	local markers: { { name: string, at: Vector3 } } = {
+		{ name = "Start", at = nodes[1].position },
+		{ name = "CornerApproach", at = Vector3.new(0, 0, LAB_CORNER_Z - 130) },
+		{ name = "BlindRight", at = cornerPosition },
+		{ name = "Descent", at = Vector3.new(430, -12, 644) },
+		{ name = "Rough", at = Vector3.new(1320, -128, 822) },
+		{ name = "LeftBend", at = Vector3.new(1700, -136, 1120) },
+		{ name = "Bridge", at = Vector3.new(1700, -136, 1182) },
+		{ name = "Climb", at = Vector3.new(1622, -102, 1700) },
+		{ name = "SBends", at = Vector3.new(1784, -88, 1902) },
+		{ name = "Depot", at = deliveryPosition },
 	}
 	for _, marker in markers do
 		table.insert(route.landmarks, {
-			name = marker[1] :: string,
-			progress = WorldBuilder.labProgress(route, marker[2] :: Vector3),
+			name = marker.name,
+			progress = WorldBuilder.labProgress(route, marker.at),
 		})
 	end
 
