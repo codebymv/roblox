@@ -1,0 +1,204 @@
+--!strict
+
+--[[
+	Every tuning number for the fun-test build lives here so the whole feel of
+	the truck can be moved without touching logic.
+
+	Geometry convention: the chassis local forward is -Z (Roblox LookVector), so
+	the cab sits at negative Z and the load bed at positive Z.
+]]
+
+local LabConfig = {
+	-- ---------------------------------------------------------------- chassis
+	ChassisSize = Vector3.new(9, 2.6, 16),
+	-- Roblox mass = volume * density. 9*2.6*16 = 374 studs^3.
+	ChassisDensity = 3.4,
+
+	CabSize = Vector3.new(8.4, 5, 6),
+	CabOffset = Vector3.new(0, 3.8, -5),
+	CabDensity = 0.6,
+
+	RailHeight = 1.4,
+
+	-- --------------------------------------------------------------- wheels
+	-- Local mount points. Front wheels are at negative Z.
+	WheelOffsets = {
+		FL = Vector3.new(-3.7, -0.6, -5.2),
+		FR = Vector3.new(3.7, -0.6, -5.2),
+		RL = Vector3.new(-3.7, -0.6, 5.2),
+		RR = Vector3.new(3.7, -0.6, 5.2),
+	},
+	WheelRadius = 1.5,
+	WheelWidth = 1.1,
+
+	-- ----------------------------------------------------------- suspension
+	-- Ray length from the mount. Ground contact anywhere shorter compresses.
+	SuspensionRestLength = 3.1,
+	-- Fraction of rest length compressed when the truck is parked and level.
+	SuspensionStaticCompression = 0.34,
+	-- 1.0 would be critically damped. Under one leaves a readable body roll.
+	SuspensionDampingRatio = 0.42,
+	-- Hard cap so a single frame can never launch the truck.
+	SuspensionMaxForceScale = 3.2,
+
+	-- ---------------------------------------------------------------- engine
+	-- Acceleration in studs/s^2 that the drive wheels try to deliver.
+	EngineAccel = 34,
+	ReverseAccel = 16,
+	BrakeAccel = 46,
+	-- Constant drag so releasing throttle actually slows you.
+	CoastDecel = 5,
+	MaxForwardSpeed = 64,
+	MaxReverseSpeed = 22,
+	-- Below this the drivetrain stops pushing back, or a parked truck jitters.
+	SpeedDeadzone = 0.6,
+
+	-- ----------------------------------------------------------------- grip
+	-- Fraction of lateral slip velocity cancelled per second, per axle.
+	-- Rear slightly lower than front so the back steps out before the front
+	-- washes wide, which is the readable, recoverable failure mode.
+	GripFront = 15.5,
+	GripRear = 12.5,
+	-- Above this lateral force per wheel the tyre breaks traction.
+	GripLimitPerWheel = 2.1,
+
+	MaxSteerAngleDeg = 30,
+	-- Steering authority falls off with speed or the truck flips on a tap.
+	SteerSpeedFalloff = 46,
+	MinSteerFactor = 0.28,
+	SteerRateDegPerSec = 150,
+
+	-- Kills the slow spin a raycast vehicle accumulates with no real tyres.
+	YawDamping = 1.4,
+	MaxAngularSpeed = 3.2,
+
+	-- ------------------------------------------------------------ surfaces
+	-- gripScale, rollingResistance (studs/s^2)
+	Surfaces = {
+		Road = { grip = 1, resistance = 0 },
+		Rough = { grip = 0.82, resistance = 3.5 },
+		Shoulder = { grip = 0.5, resistance = 11 },
+		Bridge = { grip = 1, resistance = 0 },
+	},
+
+	-- ----------------------------------------------------------------- cargo
+	CrateSize = Vector3.new(5.5, 5.5, 5.5),
+	-- Heavy enough that where it sits genuinely changes how the truck handles.
+	CrateDensity = 2.6,
+	-- Crate centre in chassis local space when seated on the bed.
+	CrateHome = Vector3.new(0, 4.05, 3),
+
+	-- Strap anchors. Rail end is on the chassis, crate end on the load's top
+	-- corners, so a strap resists both sliding and tipping.
+	StrapOrder = { "FL", "FR", "RL", "RR" },
+	StrapRailLocal = {
+		FL = Vector3.new(-4.35, 1.4, 0.25),
+		FR = Vector3.new(4.35, 1.4, 0.25),
+		RL = Vector3.new(-4.35, 1.4, 5.75),
+		RR = Vector3.new(4.35, 1.4, 5.75),
+	},
+	StrapCrateLocal = {
+		FL = Vector3.new(-2.75, 2.75, -2.75),
+		FR = Vector3.new(2.75, 2.75, -2.75),
+		RL = Vector3.new(-2.75, 2.75, 2.75),
+		RR = Vector3.new(2.75, 2.75, 2.75),
+	},
+
+	StrapMaxHealth = 100,
+	-- Load above this (in crate-weights) starts chewing through a strap.
+	StrapTensionThreshold = 0.55,
+	-- Health lost per second per unit of tension over the threshold.
+	StrapWearRate = 46,
+	-- Straps recover slowly when nothing is pulling on them.
+	StrapRecoverRate = 1.6,
+	-- Slack added to a rope each time it takes a shock, which is what lets a
+	-- load creep out of position over a run instead of failing all at once.
+	StrapStretchPerShock = 0.11,
+	StrapMaxStretch = 2.6,
+
+	-- Strapper work rates.
+	StrapTightenPerSecond = 42,
+	StrapReattachSeconds = 1.9,
+	-- A broken strap can only be refitted if its two ends are close enough.
+	StrapReattachMaxGap = 8.5,
+
+	-- ------------------------------------------------------- cargo readout
+	-- Thresholds on measured crate displacement, in studs from home.
+	ShiftedOffset = 0.75,
+	SlidingOffset = 1.9,
+	-- Crate roll relative to the bed, in degrees.
+	LeaningAngleDeg = 11,
+	HangingAngleDeg = 26,
+	-- Beyond this the load is off the deck and only the straps hold it.
+	HangingOffset = 3.4,
+	LostOffset = 9,
+	DragForcePerStud = 320,
+
+	-- --------------------------------------------------------------- crew
+	MaxCrew = 4,
+	StationOrder = { "FL", "FR", "RL", "RR" },
+	-- Where a strapper stands to work each strap, in chassis local space.
+	StationLocal = {
+		FL = CFrame.new(-5.9, 1.9, 0.25) * CFrame.Angles(0, math.rad(90), 0),
+		FR = CFrame.new(5.9, 1.9, 0.25) * CFrame.Angles(0, math.rad(-90), 0),
+		RL = CFrame.new(-5.9, 1.9, 5.75) * CFrame.Angles(0, math.rad(90), 0),
+		RR = CFrame.new(5.9, 1.9, 5.75) * CFrame.Angles(0, math.rad(-90), 0),
+	},
+	StationSeatSize = Vector3.new(2.4, 0.5, 2.4),
+	--[[
+		A character's own mass is negligible next to a truck, so the station
+		platform carries the crew member's braced weight instead. This is what
+		makes "get to the high side" a real instruction: moving a station moves
+		real mass within the assembly and genuinely changes the roll balance.
+	]]
+	StationSeatDensity = 60,
+	DriverSeatOffset = CFrame.new(-1.6, 2.2, -5.4),
+
+	TraversalSecondsPerStud = 0.085,
+	TraversalMinSeconds = 0.45,
+	--[[
+		Lateral acceleration that throws a crew member off mid-traversal. Read
+		against the smoothed chassis acceleration, so this is a sustained hard
+		corner rather than a single-frame contact spike. Primary tuning knob for
+		how dangerous crossing the bed feels.
+	]]
+	ThrowLateralAccel = 52,
+	ThrowRecoverySeconds = 4,
+
+	-- ------------------------------------------------------------ pressure
+	-- The director perturbs state. It never assigns damage to a meter.
+	PressureFirstEventSeconds = 26,
+	PressureIntervalSeconds = NumberRange.new(17, 30),
+	StrapWeakenAmount = NumberRange.new(24, 44),
+	SuspensionDamageAmount = NumberRange.new(0.3, 0.55),
+	SteeringDegradeAmount = NumberRange.new(0.2, 0.4),
+	GustAccel = NumberRange.new(14, 26),
+	GustSeconds = NumberRange.new(1.4, 2.6),
+
+	-- The scripted opener: one strap starts compromised so the first corner
+	-- has something to find.
+	OpeningWeakStrap = "FR",
+	OpeningWeakHealth = 38,
+
+	-- ------------------------------------------------------------- session
+	-- The route is about two to three minutes of driving; this is a generous
+	-- cap so a crew that stops to make repairs is not punished by the clock.
+	RunTimeLimitSeconds = 330,
+	RestartDelaySeconds = 2.5,
+	ResultDisplaySeconds = 6,
+	-- Below this the truck is written off.
+	MinChassisIntegrity = 0,
+	MaxChassisIntegrity = 100,
+	ImpactDamageScale = 1.5,
+	-- Fall out of the world.
+	VoidY = -140,
+}
+
+function LabConfig.surface(name: string?)
+	if name and LabConfig.Surfaces[name] then
+		return LabConfig.Surfaces[name]
+	end
+	return LabConfig.Surfaces.Road
+end
+
+return LabConfig

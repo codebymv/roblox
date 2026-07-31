@@ -6,16 +6,35 @@ Prototype project for a **Co-op Operational Catastrophe** experience on Roblox:
 
 This folder is intentionally separate from the UE5 PlatypunkGame repo.
 
+## Two builds, one switch
+
+`src/Shared/DevConfig.lua` decides which game boots.
+
+| Mode | What runs | What it is for |
+|---|---|---|
+| `FunTest` **(current default)** | `TruckLab`: one crew, one physics truck, one route, one crate | Answering whether the core interaction is fun at all |
+| `Depot` | `DepotService`: four bays, economy, persistence, kits, leg ladder | The full meta build |
+
+Nothing is deleted between the two. In `FunTest` the depot, economy, persistence,
+shop, live-ops and leg ladder simply never initialise, so there is no DataStore
+traffic and nothing standing between a player and the truck.
+
+The prototype was moved into `FunTest` after
+[Docs/CoreFunAudit_V0.md](Docs/CoreFunAudit_V0.md) found that the truck was an
+anchored, non-collidable model repositioned by `PivotTo`, that cargo condition
+was a single scalar the visuals obeyed rather than reported, and that only the
+Driver had continuous input.
+
 ## Structure
 
 ```
 roblox/
   README.md
-  Docs/                     Prototype brief, DNA analysis, metrics, slice contract
+  Docs/                     Brief, DNA analysis, core-fun audit, playtest protocol
   src/Shared/               Config, types, manifests, kits, live-ops, networking
-  src/Server/               Persistence, economy, depot, per-crew match, rigs
-  src/Client/               Crew HUD, depot panel, nameplates
-  Tests/StudioSmoke.luau    Engine-level smoke test
+  src/Server/               Fun-test lab, physics truck, depot, economy, persistence
+  src/Client/               Lab HUD and debug overlay, crew HUD, depot panel
+  Tests/StudioSmoke.luau    Engine-level smoke test, branches on DevConfig.Mode
   default.project.json      Rojo project map
 ```
 
@@ -23,6 +42,8 @@ roblox/
 
 | Doc | Purpose |
 |---|---|
+| [Docs/CoreFunAudit_V0.md](Docs/CoreFunAudit_V0.md) | Why the prototype was not producing the fantasy, and what the fun-test build bypasses |
+| [Docs/PlaytestProtocol_V0.md](Docs/PlaytestProtocol_V0.md) | Four-player test script, what not to explain, go/no-go criteria |
 | [Docs/PrototypeBrief_CargoCatastrophe_V0.md](Docs/PrototypeBrief_CargoCatastrophe_V0.md) | Product pitch, loop, roles, exclusions, kill/go |
 | [Docs/TopGameDNA_V0.md](Docs/TopGameDNA_V0.md) | Top-10 structural audit and the patterns we adopted or declined |
 | [Docs/ValidationMetrics_V0.md](Docs/ValidationMetrics_V0.md) | What to measure in playtests |
@@ -46,7 +67,50 @@ rojo serve
 to API Services*. Without it the server runs profiles in volatile mode: everything works, nothing
 saves, and it says so once in the output.
 
-## The loop
+## The fun-test loop (`DevConfig.Mode = "FunTest"`)
+
+One truck, one crate, one road. A run starts a couple of seconds after you join
+and restarts a couple of seconds after it ends.
+
+**The truck is real.** An unanchored, collidable chassis on four raycast
+suspension springs. Cornering comes from traction-limited lateral grip at each
+contact patch, so lifting a wheel genuinely costs you grip, and the truck can
+roll over. Network ownership is pinned to the server, because server-applied
+forces and client physics ownership cannot coexist; the driver pays one round
+trip of input latency for a truck every player sees identically.
+
+**The load is real.** A crate with mass sits on the bed held by four ropes to
+its top corners. Strap tension is computed from the chassis's measured
+acceleration and the actual rope geometry, tension over a threshold wears a
+strap down, and a strap at zero health snaps. Nothing writes a stability number:
+the HUD's condition percentage is read back out of where the crate physically
+is.
+
+Condition runs `Secure → Shifted → Leaning → Sliding → PartiallyDetached →
+Hanging → Dragging → Lost`, and each state is a measurement, not a flag. A
+dragging crate applies real drag and hauls the truck off line through its own
+straps.
+
+**Pressure, not outcomes.** Three categories replace the eight authored
+failures: weaken a named strap, sag a suspension corner or soften the steering,
+or push the truck sideways. The director never assigns damage. The road does the
+rest, through a blind right-hander with adverse camber, a long descent, a broken
+surface, and a bridge with nothing either side of it.
+
+### Fun-test controls
+
+- **Driver:** `WASD` or arrows, `Space` to brake.
+- **Crew:** `1`-`4` to commit to a strap station, hold `E` to work the strap you
+  are standing at. Crossing the bed takes time and cannot be cancelled, and
+  enough lateral load throws you off.
+- **`T`** hands over or takes the wheel. **`R`** restarts. **`F`** toggles the
+  tuning overlay (off it goes before you show anyone).
+
+Crew are welded into the chassis assembly rather than walking on it: humanoids
+do not stay on a platform moving at 60 studs per second. They therefore visibly
+sit at their stations, which is cosmetic debt to be repaid, not a design choice.
+
+## The depot loop (`DevConfig.Mode = "Depot"`)
 
 The server is a **depot** with four bays. Each bay is one crew of up to four on its own parallel
 route lane, visible to everyone else in the yard.
@@ -80,6 +144,20 @@ Solo remains playable: a lone player is always Driver, and the opening beat beco
 brake instead of a strap only a Strapper could fix.
 
 ## Server layout
+
+### Fun-test build
+
+| Module | Responsibility |
+|---|---|
+| `src/Server/TruckLab.lua` | The whole fun-test session: phases, roles, remotes, restart |
+| `src/Server/PhysicsChassis.lua` | Raycast-suspension truck, grip, steering, impact and rollover |
+| `src/Server/CargoLoad.lua` | Roped crate, per-strap tension and health, derived condition |
+| `src/Server/StrapperStations.lua` | Station occupancy, committed traversals, counterweight, throws |
+| `src/Server/PressureDirector.lua` | Three pressure categories that perturb state, never outcomes |
+| `src/Server/LabTelemetry.lua` | Per-run event log printed to the server output |
+| `src/Server/RateLimiter.lua` | Token bucket in front of every client intent remote |
+
+### Depot build
 
 | Module | Responsibility |
 |---|---|

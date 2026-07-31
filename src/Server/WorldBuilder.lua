@@ -307,6 +307,344 @@ function WorldBuilder.build(): WorldInfo
 	}
 end
 
+--[[
+	================= Fun-test route =================
+
+	Unlike the depot lanes, this route has real geometry the truck is genuinely
+	constrained by: a blind corner with adverse camber, a long descent, a broken
+	surface, and a bridge with nothing either side of it. Environmental pressure
+	is the road, not an event that fires.
+]]
+
+export type LabRouteInfo = {
+	root: Folder,
+	points: { Vector3 },
+	cumulative: { number },
+	totalLength: number,
+	startCFrame: CFrame,
+	deliveryPosition: Vector3,
+	deliveryPad: BasePart,
+	cornerPosition: Vector3,
+	bridgePosition: Vector3,
+	descentPosition: Vector3,
+}
+
+type RouteNode = {
+	position: Vector3,
+	width: number,
+	surface: string,
+	bankDeg: number,
+	shoulders: boolean,
+}
+
+local function node(position: Vector3, width: number, surface: string, bankDeg: number, shoulders: boolean): RouteNode
+	return { position = position, width = width, surface = surface, bankDeg = bankDeg, shoulders = shoulders }
+end
+
+local function quadratic(a: Vector3, control: Vector3, b: Vector3, t: number): Vector3
+	local inv = 1 - t
+	return a * (inv * inv) + control * (2 * inv * t) + b * (t * t)
+end
+
+--[[
+	The route is about 3,900 studs, which is roughly two to three minutes of
+	driving once corners, recoveries and stops are accounted for.
+
+	That is shorter than the five to eight minutes the brief asked for, and the
+	trade is deliberate: a run that reliably produces the designed cascade and
+	then a second emergent one, and can be repeated twenty times in a session,
+	is worth more during validation than a padded one. Lengthening it later is a
+	matter of adding nodes to this list.
+]]
+local LAB_CORNER_Z = 420
+
+local function buildLabNodes(): { RouteNode }
+	local nodes: { RouteNode } = {}
+
+	local function straight(position: Vector3, width: number, surface: string, bank: number, shoulders: boolean)
+		table.insert(nodes, node(position, width, surface, bank, shoulders))
+	end
+
+	local function curve(control: Vector3, target: Vector3, width: number, bank: number, steps: number)
+		local from = nodes[#nodes].position
+		for step = 1, steps do
+			table.insert(nodes, node(quadratic(from, control, target, step / steps), width, "Road", bank, true))
+		end
+	end
+
+	-- 1. Warm-up straight. Long enough to find the throttle, the brake, and the
+	--    fact that the load moves when you use either.
+	straight(Vector3.new(0, 0, 0), 34, "Road", 0, true)
+	straight(Vector3.new(0, 0, LAB_CORNER_Z), 34, "Road", 0, true)
+
+	-- 2. The blind right-hander, cambered the wrong way so the load wants to go
+	--    outboard exactly when the driver is already committed.
+	curve(Vector3.new(0, -2, 570), Vector3.new(150, -6, 604), 27, -6, 8)
+
+	-- 3. Breather, and the last flat road for a while.
+	straight(Vector3.new(430, -12, 644), 32, "Road", 0, true)
+
+	-- 4. Long descent in two stages. Gravity now adds to anything the corner
+	--    started, and the front axle carries the load.
+	straight(Vector3.new(770, -72, 702), 30, "Road", 0, true)
+	straight(Vector3.new(1050, -122, 762), 30, "Road", 0, true)
+
+	-- 5. Broken surface. Bumps do the work, not a failure event.
+	straight(Vector3.new(1320, -128, 822), 30, "Rough", 0, true)
+	straight(Vector3.new(1560, -132, 900), 30, "Rough", 0, true)
+
+	-- 6. Left-hander, so a crew that spent the whole first half braced on one
+	--    side of the bed is now on the wrong side.
+	curve(Vector3.new(1690, -134, 986), Vector3.new(1700, -136, 1120), 26, 5, 6)
+
+	-- 7. Bridge. No shoulders, no rails, no second chance.
+	straight(Vector3.new(1700, -136, 1182), 30, "Road", 0, true)
+	straight(Vector3.new(1700, -136, 1190), 13, "Bridge", 0, false)
+	straight(Vector3.new(1700, -136, 1444), 13, "Bridge", 0, false)
+
+	-- 8. Climb out, which is where a dragging load really costs you.
+	straight(Vector3.new(1700, -136, 1452), 32, "Road", 0, true)
+	straight(Vector3.new(1622, -102, 1700), 32, "Road", 0, true)
+
+	-- 9. S-bends. Two direction changes in a row is the cheapest way to make an
+	--    already-shifted load into a second crisis.
+	curve(Vector3.new(1608, -94, 1822), Vector3.new(1784, -88, 1902), 28, -5, 6)
+	curve(Vector3.new(1962, -82, 1982), Vector3.new(1962, -76, 2122), 28, 5, 6)
+
+	-- 10. Rough descent to finish, taken with whatever is left.
+	straight(Vector3.new(1962, -112, 2382), 30, "Rough", 0, true)
+
+	-- 11. Run-in to the depot.
+	straight(Vector3.new(1962, -106, 2620), 34, "Road", 0, true)
+
+	return nodes
+end
+
+local function buildRoadSegment(folder: Folder, from: RouteNode, to: RouteNode)
+	local delta = to.position - from.position
+	local length = delta.Magnitude
+	if length < 0.05 then
+		return
+	end
+
+	local midpoint = (from.position + to.position) / 2
+	local bank = math.rad((from.bankDeg + to.bankDeg) / 2)
+	local width = (from.width + to.width) / 2
+	local orientation = CFrame.lookAt(midpoint, to.position) * CFrame.Angles(0, 0, bank)
+
+	if from.shoulders and to.shoulders then
+		local shoulder = makePart(
+			"Shoulder",
+			Vector3.new(width + 52, 1, length + 2),
+			orientation * CFrame.new(0, -0.8, 0),
+			Color3.fromRGB(86, 108, 70),
+			folder
+		)
+		shoulder.Material = Enum.Material.Grass
+		shoulder:SetAttribute("LabSurface", "Shoulder")
+	end
+
+	local road = makePart(
+		"Road",
+		Vector3.new(width, 1.2, length + 1.5),
+		orientation,
+		if to.surface == "Bridge"
+			then Color3.fromRGB(96, 84, 66)
+			elseif to.surface == "Rough" then Color3.fromRGB(74, 68, 58)
+			else Color3.fromRGB(58, 61, 68),
+		folder
+	)
+	road.Material = if to.surface == "Bridge"
+		then Enum.Material.WoodPlanks
+		elseif to.surface == "Rough" then Enum.Material.Ground
+		else Enum.Material.Asphalt
+	road:SetAttribute("LabSurface", to.surface)
+
+	if to.surface == "Rough" then
+		-- Deterministic bumps: the same road every run, so a crew can learn it.
+		local bumpCount = math.max(2, math.floor(length / 9))
+		for index = 1, bumpCount do
+			local alpha = (index - 0.5) / bumpCount
+			local side = if index % 2 == 0 then 1 else -1
+			local lateral = side * (width * 0.22 + (index % 3) * 1.4)
+			local bump = makePart(
+				"Bump",
+				Vector3.new(6 + (index % 3) * 2.5, 0.9 + (index % 2) * 0.35, 5),
+				orientation * CFrame.new(lateral, 0.5, (alpha - 0.5) * length),
+				Color3.fromRGB(88, 80, 68),
+				folder
+			)
+			bump.Material = Enum.Material.Ground
+			bump:SetAttribute("LabSurface", "Rough")
+		end
+	end
+
+	if to.surface ~= "Bridge" then
+		local centerLine = makePart(
+			"CenterLine",
+			Vector3.new(0.4, 0.1, math.max(1, length - 3)),
+			orientation * CFrame.new(0, 0.66, 0),
+			Color3.fromRGB(245, 200, 55),
+			folder
+		)
+		centerLine.CanCollide = false
+		centerLine.CanQuery = false
+	else
+		for _, side in { -1, 1 } do
+			local kerb = makePart(
+				"BridgeKerb",
+				Vector3.new(0.8, 1.1, length),
+				orientation * CFrame.new(side * (width / 2 - 0.4), 0.9, 0),
+				Color3.fromRGB(150, 120, 80),
+				folder
+			)
+			kerb.Material = Enum.Material.WoodPlanks
+			kerb:SetAttribute("LabSurface", "Bridge")
+		end
+	end
+end
+
+function WorldBuilder.buildLabRoute(): LabRouteInfo
+	local existing = Workspace:FindFirstChild("CargoLab")
+	if existing then
+		existing:Destroy()
+	end
+
+	-- A leftover baseplate sits at y = 0, right where the warm-up straight is,
+	-- and the suspension would happily drive on it. Serving into an existing
+	-- Studio place is the common way to hit this.
+	for _, name in { "Baseplate", "SpawnLocation" } do
+		local stray = Workspace:FindFirstChild(name)
+		if stray and stray:IsA("BasePart") then
+			stray:Destroy()
+		end
+	end
+
+	local root = Instance.new("Folder")
+	root.Name = "CargoLab"
+	root.Parent = Workspace
+
+	local nodes = buildLabNodes()
+
+	local staging = makePart(
+		"StagingPad",
+		Vector3.new(60, 1, 46),
+		CFrame.new(0, 0, -22),
+		Color3.fromRGB(48, 50, 58),
+		root
+	)
+	staging.Material = Enum.Material.Concrete
+	staging:SetAttribute("LabSurface", "Road")
+
+	local spawn = Instance.new("SpawnLocation")
+	spawn.Name = "LabSpawn"
+	spawn.Size = Vector3.new(16, 1, 16)
+	spawn.CFrame = CFrame.new(0, 1.1, -36) * CFrame.Angles(0, math.pi, 0)
+	spawn.Anchored = true
+	spawn.Neutral = true
+	spawn.Transparency = 0.4
+	spawn.Color = Color3.fromRGB(230, 230, 230)
+	spawn.Parent = root
+
+	for index = 1, #nodes - 1 do
+		buildRoadSegment(root, nodes[index], nodes[index + 1])
+	end
+
+	local points: { Vector3 } = {}
+	local cumulative: { number } = {}
+	local total = 0
+	for index, entry in nodes do
+		points[index] = entry.position
+		if index == 1 then
+			cumulative[index] = 0
+		else
+			total += (entry.position - nodes[index - 1].position).Magnitude
+			cumulative[index] = total
+		end
+	end
+
+	local deliveryPosition = nodes[#nodes].position
+
+	--[[
+		Runoff past the depot. Overshooting is a normal outcome of arriving with
+		a load that will not let you brake, and it should mean an embarrassing
+		reverse rather than dropping off the end of the world.
+	]]
+	local apron = makePart(
+		"DepotApron",
+		Vector3.new(120, 1.2, 110),
+		CFrame.new(deliveryPosition + Vector3.new(0, 0, 42)),
+		Color3.fromRGB(52, 55, 62),
+		root
+	)
+	apron.Material = Enum.Material.Concrete
+	apron:SetAttribute("LabSurface", "Road")
+
+	local deliveryPad = makePart(
+		"DeliveryPad",
+		Vector3.new(38, 0.4, 26),
+		CFrame.new(deliveryPosition + Vector3.new(0, 0.9, 0)),
+		Color3.fromRGB(55, 145, 255),
+		root
+	)
+	deliveryPad.Transparency = 0.4
+	deliveryPad.CanCollide = false
+	deliveryPad.CanQuery = false
+	deliveryPad.Material = Enum.Material.Neon
+	makeSignLabel(deliveryPad, "DROP THE LOAD HERE", Color3.fromRGB(200, 235, 255), 26)
+
+	local cornerPosition = Vector3.new(0, 0, LAB_CORNER_Z)
+	local hazard = makePart(
+		"CornerWarning",
+		Vector3.new(7, 7, 0.5),
+		CFrame.new(cornerPosition + Vector3.new(-24, 5, -40)) * CFrame.Angles(0, math.rad(35), 0),
+		Color3.fromRGB(255, 185, 35),
+		root
+	)
+	hazard.CanCollide = false
+	makeSignLabel(hazard, "BLIND RIGHT", Color3.fromRGB(255, 220, 120), 26)
+
+	return {
+		root = root,
+		points = points,
+		cumulative = cumulative,
+		totalLength = math.max(total, 1),
+		startCFrame = CFrame.lookAt(Vector3.new(0, 5, -6), Vector3.new(0, 5, 20)),
+		deliveryPosition = deliveryPosition,
+		deliveryPad = deliveryPad,
+		cornerPosition = cornerPosition,
+		bridgePosition = Vector3.new(1700, -136, 1190),
+		descentPosition = Vector3.new(430, -12, 644),
+	}
+end
+
+--[[
+	Real arc-length progress: project onto the nearest centreline segment rather
+	than reading a single world axis, so the corner and the descent count.
+]]
+function WorldBuilder.labProgress(route: LabRouteInfo, position: Vector3): number
+	local bestDistance = math.huge
+	local bestLength = 0
+
+	for index = 1, #route.points - 1 do
+		local a = route.points[index]
+		local b = route.points[index + 1]
+		local segment = b - a
+		local segmentLength = segment.Magnitude
+		if segmentLength > 0.001 then
+			local t = math.clamp((position - a):Dot(segment) / (segmentLength * segmentLength), 0, 1)
+			local closest = a + segment * t
+			local distance = (position - closest).Magnitude
+			if distance < bestDistance then
+				bestDistance = distance
+				bestLength = route.cumulative[index] + segmentLength * t
+			end
+		end
+	end
+
+	return math.clamp(bestLength / route.totalLength, 0, 1)
+end
+
 -- Lateral centre of the drivable road at a given Z, for one lane.
 function WorldBuilder.getRouteCenterX(z: number, originX: number): number
 	if z <= 88 then

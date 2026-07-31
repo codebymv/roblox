@@ -26,6 +26,16 @@ local REMOTE_NAMES = {
 	RequestDaily = "RequestDaily",
 	RoleAction = "RoleAction",
 	DriveInput = "DriveInput",
+
+	-- Fun-test build. Unused when DevConfig.Mode is "Depot".
+	LabSnapshot = "LabSnapshot",
+	LabDebug = "LabDebug",
+	LabEvent = "LabEvent",
+	LabDrive = "LabDrive",
+	LabMoveTo = "LabMoveTo",
+	LabWork = "LabWork",
+	LabRestart = "LabRestart",
+	LabSwitchRole = "LabSwitchRole",
 }
 
 local Net = {
