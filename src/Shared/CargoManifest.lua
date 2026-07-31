@@ -28,8 +28,12 @@ local RARITY_TIER: { [Types.CargoRarity]: number } = {
 	Prototype = 5,
 }
 
+-- Standard doubles as the fallback for an unrecognised rarity, and is named
+-- here so the fallback does not have to index the table by a string literal.
+local STANDARD_COLOR = Color3.fromRGB(215, 215, 215)
+
 local RARITY_COLOR: { [Types.CargoRarity]: Color3 } = {
-	Standard = Color3.fromRGB(215, 215, 215),
+	Standard = STANDARD_COLOR,
 	Uncommon = Color3.fromRGB(110, 220, 130),
 	Rare = Color3.fromRGB(95, 175, 255),
 	Exotic = Color3.fromRGB(205, 125, 255),
@@ -168,9 +172,7 @@ function CargoManifest.count(): number
 end
 
 function CargoManifest.rarityColor(rarity: Types.CargoRarity): Color3
-	-- Bracketed, because a table declared with a union-keyed indexer does not
-	-- accept dot access on one of its keys.
-	return RARITY_COLOR[rarity] or RARITY_COLOR["Standard"]
+	return RARITY_COLOR[rarity] or STANDARD_COLOR
 end
 
 function CargoManifest.crateColor(id: string): Color3
