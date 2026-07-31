@@ -166,6 +166,31 @@ function EconomyService.purchasePaint(player: Player, paintId: string): (boolean
 	return true, paint.label .. " equipped."
 end
 
+--[[
+	Equipping is not buying.
+
+	Kits already separated the two, but paint only had purchasePaint, so the
+	client's "equip" button silently spent credits on anything the player did
+	not already own. This is the missing counterpart to equipKit.
+]]
+function EconomyService.equipPaint(player: Player, paintId: string): (boolean, string)
+	local paint = RoleKits.getPaint(paintId)
+	if not paint then
+		return false, "Unknown paint."
+	end
+	local profile = PlayerDataService.get(player)
+	if not profile then
+		return false, "Profile still loading."
+	end
+	if profile.unlockedPaints[paintId] ~= true and paint.cost > 0 then
+		return false, "You do not own that paint."
+	end
+	PlayerDataService.update(player, function(data)
+		data.equippedPaint = paintId
+	end)
+	return true, paint.label .. " equipped."
+end
+
 function EconomyService.isDailyReady(player: Player): boolean
 	local profile = PlayerDataService.get(player)
 	if not profile then

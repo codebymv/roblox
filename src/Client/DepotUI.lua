@@ -412,7 +412,16 @@ local function buildPanel()
 		row.label.Size = UDim2.new(1, -108, 1, 0)
 		paintRows[paint.id] = row
 		row.button.Activated:Connect(function()
-			requestEquipRemote:FireServer({ kind = "Paint", id = paint.id })
+			-- Buying and equipping are separate on the server now, so the
+			-- button has to say which one it means. A price on the button
+			-- spends credits; EQUIP never does.
+			local snap = latest
+			local owned = paint.cost <= 0 or (snap ~= nil and snap.unlockedPaints[paint.id] == true)
+			if owned then
+				requestEquipRemote:FireServer({ kind = "Paint", id = paint.id })
+			else
+				requestPurchaseRemote:FireServer({ kind = "Paint", id = paint.id })
+			end
 		end)
 	end
 

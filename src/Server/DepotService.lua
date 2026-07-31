@@ -24,6 +24,7 @@ local Types = require(Shared:WaitForChild("Types"))
 local CrewMatch = require(script.Parent.CrewMatch)
 local EconomyService = require(script.Parent.EconomyService)
 local PlayerDataService = require(script.Parent.PlayerDataService)
+local RateLimiter = require(script.Parent.RateLimiter)
 local WorldBuilder = require(script.Parent.WorldBuilder)
 
 local DepotService = {}
@@ -33,6 +34,16 @@ local crews: { any } = {}
 local spectating: { [number]: number } = {}
 local padDebounce: { [number]: number } = {}
 local depotDirty = true
+
+--[[
+	Every client-to-server remote used to accept unlimited calls. RoleAction is
+	the one that actually matters, because each accepted call spawns a
+	task.delay, but a shared bucket is cheap enough to put in front of all of
+	them. Drive input gets its own, looser bucket since it is sent on a timer.
+]]
+local driveLimiter = RateLimiter.new(25, 40)
+local actionLimiter = RateLimiter.new(10, 15)
+local menuLimiter = RateLimiter.new(6, 12)
 
 local function toast(player: Player, message: string)
 	Net.get(Net.Names.Toast):FireClient(player, message)
@@ -290,6 +301,9 @@ end
 --------------------------------------------------------------------------------
 
 local function handlePurchase(player: Player, payload: any)
+	if not menuLimiter:allow(player) then
+		return
+	end
 	if typeof(payload) ~= "table" or typeof(payload.id) ~= "string" then
 		return
 	end
@@ -306,12 +320,15 @@ local function handlePurchase(player: Player, payload: any)
 end
 
 local function handleEquip(player: Player, payload: any)
+	if not menuLimiter:allow(player) then
+		return
+	end
 	if typeof(payload) ~= "table" or typeof(payload.id) ~= "string" then
 		return
 	end
 	local ok, message
 	if payload.kind == "Paint" then
-		ok, message = EconomyService.purchasePaint(player, payload.id)
+		ok, message = EconomyService.equipPaint(player, payload.id)
 	else
 		ok, message = EconomyService.equipKit(player, payload.id)
 	end
@@ -323,6 +340,9 @@ end
 
 local function bindRemotes()
 	Net.get(Net.Names.RequestSnapshot).OnServerEvent:Connect(function(player: Player)
+		if not menuLimiter:allow(player) then
+			return
+		end
 		Net.get(Net.Names.DepotSnapshot):FireClient(player, buildDepotSnapshot(player))
 		local crew = crewFor(player)
 		if crew then
@@ -336,6 +356,9 @@ local function bindRemotes()
 	end)
 
 	Net.get(Net.Names.RequestJoinBay).OnServerEvent:Connect(function(player: Player, bayIndex: unknown)
+		if not menuLimiter:allow(player) then
+			return
+		end
 		local index = if typeof(bayIndex) == "number" then math.floor(bayIndex) else nil
 		if index and (index < 1 or index > #crews) then
 			return
@@ -344,10 +367,16 @@ local function bindRemotes()
 	end)
 
 	Net.get(Net.Names.RequestLeaveBay).OnServerEvent:Connect(function(player: Player)
+		if not menuLimiter:allow(player) then
+			return
+		end
 		leaveBay(player)
 	end)
 
 	Net.get(Net.Names.RequestSpectate).OnServerEvent:Connect(function(player: Player, bayIndex: unknown)
+		if not menuLimiter:allow(player) then
+			return
+		end
 		if crewFor(player) then
 			return
 		end
@@ -360,6 +389,9 @@ local function bindRemotes()
 	end)
 
 	Net.get(Net.Names.RequestReady).OnServerEvent:Connect(function(player: Player, isReady: unknown)
+		if not actionLimiter:allow(player) then
+			return
+		end
 		local crew = crewFor(player)
 		if not crew then
 			return
@@ -371,6 +403,9 @@ local function bindRemotes()
 	end)
 
 	Net.get(Net.Names.RequestStart).OnServerEvent:Connect(function(player: Player)
+		if not actionLimiter:allow(player) then
+			return
+		end
 		local crew = crewFor(player)
 		if crew then
 			crew:forceStart(player)
@@ -378,6 +413,9 @@ local function bindRemotes()
 	end)
 
 	Net.get(Net.Names.RequestDecision).OnServerEvent:Connect(function(player: Player, choice: unknown)
+		if not actionLimiter:allow(player) then
+			return
+		end
 		local crew = crewFor(player)
 		if crew and typeof(choice) == "string" then
 			crew:vote(player, choice)
@@ -385,6 +423,9 @@ local function bindRemotes()
 	end)
 
 	Net.get(Net.Names.RequestNewConvoy).OnServerEvent:Connect(function(player: Player)
+		if not actionLimiter:allow(player) then
+			return
+		end
 		local crew = crewFor(player)
 		if crew then
 			crew:requestNewConvoy(player)
@@ -395,6 +436,9 @@ local function bindRemotes()
 	Net.get(Net.Names.RequestEquip).OnServerEvent:Connect(handleEquip)
 
 	Net.get(Net.Names.RequestDaily).OnServerEvent:Connect(function(player: Player)
+		if not menuLimiter:allow(player) then
+			return
+		end
 		local ok, _amount, message = EconomyService.claimDaily(player)
 		toast(player, message)
 		if ok then
@@ -403,6 +447,9 @@ local function bindRemotes()
 	end)
 
 	Net.get(Net.Names.DriveInput).OnServerEvent:Connect(function(player: Player, payload: any)
+		if not driveLimiter:allow(player) then
+			return
+		end
 		local crew = crewFor(player)
 		if crew then
 			crew:handleDriveInput(player, payload)
@@ -410,6 +457,9 @@ local function bindRemotes()
 	end)
 
 	Net.get(Net.Names.RoleAction).OnServerEvent:Connect(function(player: Player, action: unknown)
+		if not actionLimiter:allow(player) then
+			return
+		end
 		local crew = crewFor(player)
 		if crew and typeof(action) == "string" then
 			crew:handleRoleAction(player, action)
