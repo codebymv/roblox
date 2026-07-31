@@ -1,0 +1,13 @@
+# Chosen to match the code that already exists rather than to impose a new
+# house style, so adopting the formatter is not a repo-wide diff.
+
+column_width = 120
+line_endings = "Unix"
+indent_type = "Tabs"
+indent_width = 4
+quote_style = "AutoPreferDouble"
+call_parentheses = "Always"
+collapse_simple_statement = "Never"
+
+[sort_requires]
+enabled = false

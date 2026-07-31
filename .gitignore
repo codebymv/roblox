@@ -8,6 +8,12 @@
 sourcemap.json
 *.project.json.bak
 
+# Derived from the live Roblox API dump; regenerate rather than commit.
+# selene generate-roblox-std
+roblox.yml
+# curl the copy from the luau-lsp repo (see .github/workflows/ci.yml)
+globalTypes.d.luau
+
 # OS
 .DS_Store
 Thumbs.db

@@ -12,6 +12,15 @@
         "$path": "src/Server"
       }
     },
+    "ServerStorage": {
+      "$className": "ServerStorage",
+      "Tests": {
+        "$className": "Folder",
+        "StudioSmoke": {
+          "$path": "Tests/StudioSmoke.luau"
+        }
+      }
+    },
     "StarterPlayer": {
       "$className": "StarterPlayer",
       "StarterPlayerScripts": {

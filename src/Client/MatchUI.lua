@@ -20,6 +20,8 @@ local Net = require(Shared:WaitForChild("Net"))
 local Roles = require(Shared:WaitForChild("Roles"))
 local Types = require(Shared:WaitForChild("Types"))
 
+local UIKit = require(script.Parent.UIKit)
+
 local MatchUI = {}
 
 local player = Players.LocalPlayer
@@ -84,18 +86,15 @@ local function isLivePhase(phase: Types.CrewPhase): boolean
 end
 
 local function makeLabel(parent: Instance, name: string, order: number, height: number): TextLabel
-	local label = Instance.new("TextLabel")
-	label.Name = name
-	label.Size = UDim2.new(1, 0, 0, height)
-	label.BackgroundTransparency = 1
-	label.Font = Enum.Font.GothamMedium
-	label.TextSize = 16
-	label.TextXAlignment = Enum.TextXAlignment.Left
-	label.TextColor3 = Color3.fromRGB(240, 240, 240)
-	label.LayoutOrder = order
-	label.Text = name
-	label.Parent = parent
-	return label
+	return UIKit.label({
+		Name = name,
+		Size = UDim2.new(1, 0, 0, height),
+		TextSize = 16,
+		TextColor3 = Color3.fromRGB(240, 240, 240),
+		LayoutOrder = order,
+		Text = name,
+		Parent = parent,
+	})
 end
 
 local function makeButton(
@@ -105,24 +104,18 @@ local function makeButton(
 	size: UDim2,
 	color: Color3
 ): TextButton
-	local button = Instance.new("TextButton")
-	button.Name = name
-	button.Size = size
-	button.BackgroundColor3 = color
-	button.BackgroundTransparency = 0.08
-	button.BorderSizePixel = 0
-	button.AutoButtonColor = true
-	button.Font = Enum.Font.GothamBold
-	button.TextSize = 17
-	button.TextColor3 = Color3.new(1, 1, 1)
-	button.Text = text
-	button.Visible = false
-	button.Parent = parent
-
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 10)
-	corner.Parent = button
-	return button
+	return UIKit.button({
+		Name = name,
+		Size = size,
+		BackgroundColor3 = color,
+		BackgroundTransparency = 0.08,
+		TextSize = 17,
+		TextColor3 = Color3.new(1, 1, 1),
+		Text = text,
+		Visible = false,
+		CornerRadius = 10,
+		Parent = parent,
+	})
 end
 
 local function getMyRole(snapshot: Types.CrewSnapshot): Types.RoleId?
@@ -346,24 +339,21 @@ local function bindHoldButton(button: TextButton, inputName: string)
 end
 
 local function mountStatusPanel()
-	local frame = Instance.new("Frame")
-	frame.Name = "Status"
-	frame.AnchorPoint = Vector2.new(0, 0)
-	frame.Size = UDim2.new(1, -24, 0, 236)
-	frame.Position = UDim2.new(0, 12, 0, 12)
-	frame.BackgroundColor3 = Color3.fromRGB(20, 22, 28)
-	frame.BackgroundTransparency = 0.12
-	frame.BorderSizePixel = 0
-	frame.Parent = gui
+	local frame = UIKit.panel({
+		Name = "Status",
+		AnchorPoint = Vector2.new(0, 0),
+		Size = UDim2.new(1, -24, 0, 236),
+		Position = UDim2.new(0, 12, 0, 12),
+		BackgroundColor3 = Color3.fromRGB(20, 22, 28),
+		BackgroundTransparency = 0.12,
+		CornerRadius = 12,
+		Parent = gui,
+	})
 
 	local constraint = Instance.new("UISizeConstraint")
 	constraint.MaxSize = Vector2.new(560, 236)
 	constraint.MinSize = Vector2.new(290, 220)
 	constraint.Parent = frame
-
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 12)
-	corner.Parent = frame
 
 	local layout = Instance.new("UIListLayout")
 	layout.Padding = UDim.new(0, 2)
@@ -410,20 +400,17 @@ local function mountStatusPanel()
 end
 
 local function mountManifestCard()
-	manifestFrame = Instance.new("Frame")
-	manifestFrame.Name = "Manifest"
-	manifestFrame.AnchorPoint = Vector2.new(1, 0)
-	manifestFrame.Size = UDim2.fromOffset(262, 104)
-	manifestFrame.Position = UDim2.new(1, -12, 0, 12)
-	manifestFrame.BackgroundColor3 = Color3.fromRGB(18, 20, 26)
-	manifestFrame.BackgroundTransparency = 0.1
-	manifestFrame.BorderSizePixel = 0
-	manifestFrame.Visible = false
-	manifestFrame.Parent = gui
-
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 12)
-	corner.Parent = manifestFrame
+	manifestFrame = UIKit.panel({
+		Name = "Manifest",
+		AnchorPoint = Vector2.new(1, 0),
+		Size = UDim2.fromOffset(262, 104),
+		Position = UDim2.new(1, -12, 0, 12),
+		BackgroundColor3 = Color3.fromRGB(18, 20, 26),
+		BackgroundTransparency = 0.1,
+		Visible = false,
+		CornerRadius = 12,
+		Parent = gui,
+	})
 
 	local padding = Instance.new("UIPadding")
 	padding.PaddingTop = UDim.new(0, 10)
@@ -431,29 +418,23 @@ local function mountManifestCard()
 	padding.PaddingRight = UDim.new(0, 12)
 	padding.Parent = manifestFrame
 
-	manifestTitle = Instance.new("TextLabel")
-	manifestTitle.Name = "Title"
-	manifestTitle.Size = UDim2.new(1, 0, 0, 22)
-	manifestTitle.BackgroundTransparency = 1
-	manifestTitle.Font = Enum.Font.GothamBlack
-	manifestTitle.TextSize = 17
-	manifestTitle.TextXAlignment = Enum.TextXAlignment.Left
-	manifestTitle.Text = ""
-	manifestTitle.Parent = manifestFrame
+	manifestTitle = UIKit.label({
+		Name = "Title",
+		Size = UDim2.new(1, 0, 0, 22),
+		Font = Enum.Font.GothamBlack,
+		TextSize = 17,
+		Parent = manifestFrame,
+	})
 
-	manifestBody = Instance.new("TextLabel")
-	manifestBody.Name = "Body"
-	manifestBody.Size = UDim2.new(1, 0, 1, -30)
-	manifestBody.Position = UDim2.fromOffset(0, 26)
-	manifestBody.BackgroundTransparency = 1
-	manifestBody.Font = Enum.Font.GothamMedium
-	manifestBody.TextSize = 14
-	manifestBody.TextWrapped = true
-	manifestBody.TextXAlignment = Enum.TextXAlignment.Left
-	manifestBody.TextYAlignment = Enum.TextYAlignment.Top
-	manifestBody.TextColor3 = Color3.fromRGB(210, 215, 225)
-	manifestBody.Text = ""
-	manifestBody.Parent = manifestFrame
+	manifestBody = UIKit.label({
+		Name = "Body",
+		Size = UDim2.new(1, 0, 1, -30),
+		Position = UDim2.fromOffset(0, 26),
+		TextWrapped = true,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		TextColor3 = Color3.fromRGB(210, 215, 225),
+		Parent = manifestFrame,
+	})
 end
 
 local function mountFailureBanner()
@@ -509,12 +490,13 @@ local function mountEndcard()
 end
 
 local function mountDriveControls()
-	driveFrame = Instance.new("Frame")
-	driveFrame.Name = "DriveControls"
-	driveFrame.Size = UDim2.fromScale(1, 1)
-	driveFrame.BackgroundTransparency = 1
-	driveFrame.Visible = false
-	driveFrame.Parent = gui
+	driveFrame = UIKit.frame({
+		Name = "DriveControls",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Visible = false,
+		Parent = gui,
+	})
 
 	leftButton = makeButton(driveFrame, "Left", "<", UDim2.fromOffset(72, 72), Color3.fromRGB(55, 85, 135))
 	leftButton.AnchorPoint = Vector2.new(0, 1)
@@ -719,12 +701,8 @@ local function bindInputs()
 end
 
 function MatchUI.mount()
-	gui = Instance.new("ScreenGui")
-	gui.Name = "CargoCatastropheUI"
-	gui.ResetOnSpawn = false
-	gui.IgnoreGuiInset = true
+	gui = UIKit.screen("CargoCatastropheUI", player:WaitForChild("PlayerGui"))
 	gui.DisplayOrder = 20
-	gui.Parent = player:WaitForChild("PlayerGui")
 
 	crewSnapshotRemote = Net.get(Net.Names.CrewSnapshot)
 	requestSnapshotRemote = Net.get(Net.Names.RequestSnapshot)

@@ -1,0 +1,20 @@
+# Requires the generated Roblox standard library:
+#
+#   selene generate-roblox-std
+#
+# That writes roblox.yml, which is gitignored because it is derived from the
+# current Roblox API dump and would otherwise go stale in the repo.
+
+std = "roblox"
+
+[lints]
+# The codebase deliberately uses `local function f() end` forward declarations
+# and reassigns module-level locals from inside methods.
+shadowing = "warn"
+
+# Snapshot and config tables mix array and hash parts by design.
+mixed_table = "allow"
+
+# Every remote payload arrives as `any` and is narrowed by hand or by
+# LabRemotes, so this fires constantly without finding anything.
+unused_variable = "warn"

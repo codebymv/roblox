@@ -1,0 +1,10 @@
+{
+  "languageMode": "nonstrict",
+  "lint": {
+    "*": true,
+    "LocalShadow": false,
+    "TableOperations": false
+  },
+  "lintErrors": false,
+  "typeErrors": true
+}

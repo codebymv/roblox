@@ -19,6 +19,8 @@ local Net = require(Shared:WaitForChild("Net"))
 local RoleKits = require(Shared:WaitForChild("RoleKits"))
 local Types = require(Shared:WaitForChild("Types"))
 
+local UIKit = require(script.Parent.UIKit)
+
 local DepotUI = {}
 
 type Row = {
@@ -57,81 +59,63 @@ local function nextOrder(): number
 end
 
 local function makeSection(text: string): TextLabel
-	local label = Instance.new("TextLabel")
-	label.Name = "Section"
-	label.Size = UDim2.new(1, 0, 0, 30)
-	label.BackgroundTransparency = 1
-	label.Font = Enum.Font.GothamBlack
-	label.TextSize = 15
-	label.TextXAlignment = Enum.TextXAlignment.Left
-	label.TextYAlignment = Enum.TextYAlignment.Bottom
-	label.TextColor3 = Color3.fromRGB(255, 190, 55)
-	label.Text = text
-	label.LayoutOrder = nextOrder()
-	label.Parent = scroller
-	return label
+	return UIKit.label({
+		Name = "Section",
+		Size = UDim2.new(1, 0, 0, 30),
+		Font = Enum.Font.GothamBlack,
+		TextSize = 15,
+		TextYAlignment = Enum.TextYAlignment.Bottom,
+		TextColor3 = Color3.fromRGB(255, 190, 55),
+		Text = text,
+		LayoutOrder = nextOrder(),
+		Parent = scroller,
+	})
 end
 
 local function makeRow(buttonWidth: number): Row
-	local frame = Instance.new("Frame")
-	frame.Name = "Row"
-	frame.Size = UDim2.new(1, 0, 0, 44)
-	frame.BackgroundColor3 = Color3.fromRGB(28, 31, 39)
-	frame.BackgroundTransparency = 0.25
-	frame.BorderSizePixel = 0
-	frame.LayoutOrder = nextOrder()
-	frame.Parent = scroller
+	local frame = UIKit.panel({
+		Name = "Row",
+		Size = UDim2.new(1, 0, 0, 44),
+		BackgroundColor3 = Color3.fromRGB(28, 31, 39),
+		BackgroundTransparency = 0.25,
+		LayoutOrder = nextOrder(),
+		Parent = scroller,
+	})
 
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 8)
-	corner.Parent = frame
+	local label = UIKit.label({
+		Name = "Label",
+		Size = UDim2.new(1, -(buttonWidth + 20), 1, 0),
+		Position = UDim2.fromOffset(10, 0),
+		TextSize = 13,
+		TextWrapped = true,
+		TextColor3 = Color3.fromRGB(232, 235, 240),
+		Parent = frame,
+	})
 
-	local label = Instance.new("TextLabel")
-	label.Name = "Label"
-	label.Size = UDim2.new(1, -(buttonWidth + 20), 1, 0)
-	label.Position = UDim2.fromOffset(10, 0)
-	label.BackgroundTransparency = 1
-	label.Font = Enum.Font.GothamMedium
-	label.TextSize = 13
-	label.TextWrapped = true
-	label.TextXAlignment = Enum.TextXAlignment.Left
-	label.TextColor3 = Color3.fromRGB(232, 235, 240)
-	label.Text = ""
-	label.Parent = frame
-
-	local button = Instance.new("TextButton")
-	button.Name = "Action"
-	button.AnchorPoint = Vector2.new(1, 0.5)
-	button.Size = UDim2.fromOffset(buttonWidth, 32)
-	button.Position = UDim2.new(1, -8, 0.5, 0)
-	button.BackgroundColor3 = Color3.fromRGB(65, 120, 225)
-	button.BorderSizePixel = 0
-	button.Font = Enum.Font.GothamBold
-	button.TextSize = 13
-	button.TextColor3 = Color3.new(1, 1, 1)
-	button.Text = ""
-	button.Parent = frame
-
-	local buttonCorner = Instance.new("UICorner")
-	buttonCorner.CornerRadius = UDim.new(0, 7)
-	buttonCorner.Parent = button
+	local button = UIKit.button({
+		Name = "Action",
+		AnchorPoint = Vector2.new(1, 0.5),
+		Size = UDim2.fromOffset(buttonWidth, 32),
+		Position = UDim2.new(1, -8, 0.5, 0),
+		BackgroundColor3 = Color3.fromRGB(65, 120, 225),
+		TextSize = 13,
+		TextColor3 = Color3.new(1, 1, 1),
+		CornerRadius = 7,
+		Parent = frame,
+	})
 
 	return { label = label, button = button }
 end
 
 local function makeTextRow(): TextLabel
-	local label = Instance.new("TextLabel")
-	label.Name = "Entry"
-	label.Size = UDim2.new(1, 0, 0, 22)
-	label.BackgroundTransparency = 1
-	label.Font = Enum.Font.GothamMedium
-	label.TextSize = 13
-	label.TextXAlignment = Enum.TextXAlignment.Left
-	label.TextColor3 = Color3.fromRGB(205, 212, 222)
-	label.Text = ""
-	label.LayoutOrder = nextOrder()
-	label.Parent = scroller
-	return label
+	return UIKit.label({
+		Name = "Entry",
+		Size = UDim2.new(1, 0, 0, 22),
+		TextSize = 13,
+		TextColor3 = Color3.fromRGB(205, 212, 222),
+		LayoutOrder = nextOrder(),
+		Parent = scroller,
+	})
 end
 
 local function setOpen(open: boolean)
@@ -289,20 +273,17 @@ end
 --------------------------------------------------------------------------------
 
 local function buildPanel()
-	panel = Instance.new("Frame")
-	panel.Name = "DepotPanel"
-	panel.AnchorPoint = Vector2.new(1, 0.5)
-	panel.Size = UDim2.new(0, 420, 1, -180)
-	panel.Position = UDim2.new(1, -12, 0.5, 30)
-	panel.BackgroundColor3 = Color3.fromRGB(16, 18, 24)
-	panel.BackgroundTransparency = 0.06
-	panel.BorderSizePixel = 0
-	panel.Visible = false
-	panel.Parent = gui
-
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 14)
-	corner.Parent = panel
+	panel = UIKit.panel({
+		Name = "DepotPanel",
+		AnchorPoint = Vector2.new(1, 0.5),
+		Size = UDim2.new(0, 420, 1, -180),
+		Position = UDim2.new(1, -12, 0.5, 30),
+		BackgroundColor3 = Color3.fromRGB(16, 18, 24),
+		BackgroundTransparency = 0.06,
+		Visible = false,
+		CornerRadius = 14,
+		Parent = gui,
+	})
 
 	local constraint = Instance.new("UISizeConstraint")
 	constraint.MaxSize = Vector2.new(420, 640)
@@ -325,48 +306,37 @@ local function buildPanel()
 	layout.SortOrder = Enum.SortOrder.LayoutOrder
 	layout.Parent = scroller
 
-	headerLabel = Instance.new("TextLabel")
-	headerLabel.Name = "Header"
-	headerLabel.Size = UDim2.new(1, 0, 0, 62)
-	headerLabel.BackgroundTransparency = 1
-	headerLabel.Font = Enum.Font.GothamBold
-	headerLabel.TextSize = 14
-	headerLabel.TextXAlignment = Enum.TextXAlignment.Left
-	headerLabel.TextColor3 = Color3.fromRGB(255, 215, 120)
-	headerLabel.Text = ""
-	headerLabel.LayoutOrder = nextOrder()
-	headerLabel.Parent = scroller
+	headerLabel = UIKit.label({
+		Name = "Header",
+		Size = UDim2.new(1, 0, 0, 62),
+		Font = Enum.Font.GothamBold,
+		TextColor3 = Color3.fromRGB(255, 215, 120),
+		LayoutOrder = nextOrder(),
+		Parent = scroller,
+	})
 
-	eventLabel = Instance.new("TextLabel")
-	eventLabel.Name = "Event"
-	eventLabel.Size = UDim2.new(1, 0, 0, 46)
-	eventLabel.BackgroundTransparency = 1
-	eventLabel.Font = Enum.Font.GothamMedium
-	eventLabel.TextSize = 13
-	eventLabel.TextWrapped = true
-	eventLabel.TextXAlignment = Enum.TextXAlignment.Left
-	eventLabel.TextYAlignment = Enum.TextYAlignment.Top
-	eventLabel.TextColor3 = Color3.fromRGB(130, 205, 255)
-	eventLabel.Text = ""
-	eventLabel.LayoutOrder = nextOrder()
-	eventLabel.Parent = scroller
+	eventLabel = UIKit.label({
+		Name = "Event",
+		Size = UDim2.new(1, 0, 0, 46),
+		TextSize = 13,
+		TextWrapped = true,
+		TextYAlignment = Enum.TextYAlignment.Top,
+		TextColor3 = Color3.fromRGB(130, 205, 255),
+		LayoutOrder = nextOrder(),
+		Parent = scroller,
+	})
 
-	dailyButton = Instance.new("TextButton")
-	dailyButton.Name = "Daily"
-	dailyButton.Size = UDim2.new(1, 0, 0, 38)
-	dailyButton.BackgroundColor3 = Color3.fromRGB(215, 150, 40)
-	dailyButton.BorderSizePixel = 0
-	dailyButton.Font = Enum.Font.GothamBold
-	dailyButton.TextSize = 14
-	dailyButton.TextColor3 = Color3.new(1, 1, 1)
-	dailyButton.Text = ""
-	dailyButton.Visible = false
-	dailyButton.LayoutOrder = nextOrder()
-	dailyButton.Parent = scroller
-
-	local dailyCorner = Instance.new("UICorner")
-	dailyCorner.CornerRadius = UDim.new(0, 8)
-	dailyCorner.Parent = dailyButton
+	dailyButton = UIKit.button({
+		Name = "Daily",
+		Size = UDim2.new(1, 0, 0, 38),
+		BackgroundColor3 = Color3.fromRGB(215, 150, 40),
+		TextSize = 14,
+		TextColor3 = Color3.new(1, 1, 1),
+		Visible = false,
+		LayoutOrder = nextOrder(),
+		CornerRadius = 8,
+		Parent = scroller,
+	})
 
 	dailyButton.Activated:Connect(function()
 		requestDailyRemote:FireServer()
@@ -437,12 +407,8 @@ local function buildPanel()
 end
 
 function DepotUI.mount()
-	gui = Instance.new("ScreenGui")
-	gui.Name = "CargoCatastropheDepot"
-	gui.ResetOnSpawn = false
-	gui.IgnoreGuiInset = true
+	gui = UIKit.screen("CargoCatastropheDepot", player:WaitForChild("PlayerGui"))
 	gui.DisplayOrder = 25
-	gui.Parent = player:WaitForChild("PlayerGui")
 
 	requestJoinRemote = Net.get(Net.Names.RequestJoinBay)
 	requestLeaveRemote = Net.get(Net.Names.RequestLeaveBay)
@@ -451,22 +417,18 @@ function DepotUI.mount()
 	requestEquipRemote = Net.get(Net.Names.RequestEquip)
 	requestDailyRemote = Net.get(Net.Names.RequestDaily)
 
-	toggleButton = Instance.new("TextButton")
-	toggleButton.Name = "DepotToggle"
-	toggleButton.AnchorPoint = Vector2.new(1, 0)
-	toggleButton.Size = UDim2.fromOffset(150, 40)
-	toggleButton.Position = UDim2.new(1, -12, 0, 126)
-	toggleButton.BackgroundColor3 = Color3.fromRGB(40, 44, 56)
-	toggleButton.BorderSizePixel = 0
-	toggleButton.Font = Enum.Font.GothamBold
-	toggleButton.TextSize = 15
-	toggleButton.TextColor3 = Color3.new(1, 1, 1)
-	toggleButton.Text = "DEPOT"
-	toggleButton.Parent = gui
-
-	local toggleCorner = Instance.new("UICorner")
-	toggleCorner.CornerRadius = UDim.new(0, 10)
-	toggleCorner.Parent = toggleButton
+	toggleButton = UIKit.button({
+		Name = "DepotToggle",
+		AnchorPoint = Vector2.new(1, 0),
+		Size = UDim2.fromOffset(150, 40),
+		Position = UDim2.new(1, -12, 0, 126),
+		BackgroundColor3 = Color3.fromRGB(40, 44, 56),
+		TextSize = 15,
+		TextColor3 = Color3.new(1, 1, 1),
+		Text = "DEPOT",
+		CornerRadius = 10,
+		Parent = gui,
+	})
 
 	buildPanel()
 

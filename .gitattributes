@@ -1,0 +1,20 @@
+# Source is stored and checked out as LF everywhere.
+#
+# Without this, a contributor whose git has core.autocrlf disabled commits CRLF,
+# and `stylua --check` disagrees with CI about a file nobody meaningfully
+# changed. Pinning the working-tree ending as well as the stored one is what
+# makes the local check and the CI check the same check.
+
+* text=auto
+
+*.lua   text eol=lf
+*.luau  text eol=lf
+*.toml  text eol=lf
+*.json  text eol=lf
+*.yml   text eol=lf
+*.md    text eol=lf
+
+*.rbxl  binary
+*.rbxlx binary
+*.rbxm  binary
+*.rbxmx binary

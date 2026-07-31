@@ -1,5 +1,21 @@
 # Prototype Brief — Cargo Catastrophe V0
 
+> **Partly superseded.** The pitch, the player, the fantasy, the clip moments
+> and the kill / go criteria all still hold, and are the reason the project
+> exists. What has moved on:
+>
+> - **Session structure.** The 8-12 minute round became a leg ladder with a
+>   bank-or-push vote in the depot build, described in
+>   [TopGameDNA_V0.md](TopGameDNA_V0.md). The fun-test build cuts it further, to
+>   one route of a couple of minutes.
+> - **Roles.** Spotter and Repair are depot-only. The fun-test build runs Driver
+>   plus three Strappers, because the audit found only the Driver had continuous
+>   input.
+> - **"Fake physics OK"** under *Smallest viable prototype* is exactly the call
+>   [CoreFunAudit_V0.md](CoreFunAudit_V0.md) reversed. The read of failure was
+>   clear and it still was not fun, because nothing was actually at stake in the
+>   simulation.
+
 ## One-sentence pitch
 
 3–4 friends jointly haul unstable cargo through a short hazard route; one bad strap, turn, or repair cascades into a clip-readable disaster; win or fail in about 8–12 minutes.

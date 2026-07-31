@@ -1,5 +1,18 @@
 # Vertical Slice — Cargo Run V0
 
+> **Superseded. Historical only.**
+>
+> This describes the depot build's run, which `DevConfig.Mode` no longer selects
+> by default. Its failure deck is prompt-driven: an event fires, a role holds a
+> button, a stability scalar moves. The fun-test build replaced that entire
+> model with physics — straps that wear and snap, a crate that slides because
+> it was thrown, and a `PressureDirector` that perturbs the simulation rather
+> than posting a prompt. See [CoreFunAudit_V0.md](CoreFunAudit_V0.md) for why,
+> and the README for what the fun-test route and roles are now.
+>
+> Worth keeping for the clip-moment framing in "Clip moments to manufacture
+> every run", which still describes what the physics build is aiming at.
+
 Build target for the first playable. One map segment, one vehicle, one cargo type. No progression beyond win/fail.
 
 ## Fantasy in one screenshot

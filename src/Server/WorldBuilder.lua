@@ -11,7 +11,9 @@
 local Workspace = game:GetService("Workspace")
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local MatchConfig = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("MatchConfig"))
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local MatchConfig = require(Shared:WaitForChild("MatchConfig"))
+local RouteMath = require(Shared:WaitForChild("RouteMath"))
 
 export type LaneInfo = {
 	index: number,
@@ -316,6 +318,11 @@ end
 	is the road, not an event that fires.
 ]]
 
+export type LabLandmark = {
+	name: string,
+	progress: number,
+}
+
 export type LabRouteInfo = {
 	root: Folder,
 	points: { Vector3 },
@@ -327,7 +334,11 @@ export type LabRouteInfo = {
 	cornerPosition: Vector3,
 	bridgePosition: Vector3,
 	descentPosition: Vector3,
+	landmarks: { LabLandmark },
 }
+
+-- Height above the centreline that a truck spawns at, matching startCFrame.
+local LAB_SPAWN_HEIGHT = 5
 
 type RouteNode = {
 	position: Vector3,
@@ -604,45 +615,67 @@ function WorldBuilder.buildLabRoute(): LabRouteInfo
 	hazard.CanCollide = false
 	makeSignLabel(hazard, "BLIND RIGHT", Color3.fromRGB(255, 220, 120), 26)
 
-	return {
+	local route: LabRouteInfo = {
 		root = root,
 		points = points,
 		cumulative = cumulative,
 		totalLength = math.max(total, 1),
-		startCFrame = CFrame.lookAt(Vector3.new(0, 5, -6), Vector3.new(0, 5, 20)),
+		startCFrame = CFrame.lookAt(
+			Vector3.new(0, LAB_SPAWN_HEIGHT, -6),
+			Vector3.new(0, LAB_SPAWN_HEIGHT, 20)
+		),
 		deliveryPosition = deliveryPosition,
 		deliveryPad = deliveryPad,
 		cornerPosition = cornerPosition,
 		bridgePosition = Vector3.new(1700, -136, 1190),
 		descentPosition = Vector3.new(430, -12, 644),
+		landmarks = {},
 	}
+
+	--[[
+		Named points on the route, resolved to arc-length progress so the warp
+		command can jump between the sections worth tuning rather than making
+		somebody drive 400 studs to reach the corner every iteration.
+
+		Each is placed a little before the feature it names, so warping there
+		gives you the approach rather than dropping you mid-event.
+	]]
+	local markers = {
+		{ "Start", nodes[1].position },
+		{ "CornerApproach", Vector3.new(0, 0, LAB_CORNER_Z - 130) },
+		{ "BlindRight", cornerPosition },
+		{ "Descent", Vector3.new(430, -12, 644) },
+		{ "Rough", Vector3.new(1320, -128, 822) },
+		{ "LeftBend", Vector3.new(1700, -136, 1120) },
+		{ "Bridge", Vector3.new(1700, -136, 1182) },
+		{ "Climb", Vector3.new(1622, -102, 1700) },
+		{ "SBends", Vector3.new(1784, -88, 1902) },
+		{ "Depot", deliveryPosition },
+	}
+	for _, marker in markers do
+		table.insert(route.landmarks, {
+			name = marker[1] :: string,
+			progress = WorldBuilder.labProgress(route, marker[2] :: Vector3),
+		})
+	end
+
+	return route
+end
+
+-- Both of these are thin wrappers over Shared/RouteMath, which is engine-free
+-- so the arc-length maths can be covered by the headless tests.
+function WorldBuilder.labProgress(route: LabRouteInfo, position: Vector3): number
+	return RouteMath.progress(route, position)
 end
 
 --[[
-	Real arc-length progress: project onto the nearest centreline segment rather
-	than reading a single world axis, so the corner and the descent count.
+	The inverse of labProgress: a CFrame on the centreline at a given fraction
+	of the route, facing the way the truck should be pointing. Used by the warp
+	command so a tuning pass can start at the corner, the descent or the bridge
+	instead of at the depot gate.
 ]]
-function WorldBuilder.labProgress(route: LabRouteInfo, position: Vector3): number
-	local bestDistance = math.huge
-	local bestLength = 0
-
-	for index = 1, #route.points - 1 do
-		local a = route.points[index]
-		local b = route.points[index + 1]
-		local segment = b - a
-		local segmentLength = segment.Magnitude
-		if segmentLength > 0.001 then
-			local t = math.clamp((position - a):Dot(segment) / (segmentLength * segmentLength), 0, 1)
-			local closest = a + segment * t
-			local distance = (position - closest).Magnitude
-			if distance < bestDistance then
-				bestDistance = distance
-				bestLength = route.cumulative[index] + segmentLength * t
-			end
-		end
-	end
-
-	return math.clamp(bestLength / route.totalLength, 0, 1)
+function WorldBuilder.labCFrameAt(route: LabRouteInfo, progress: number): CFrame
+	return RouteMath.cframeAt(route, progress, LAB_SPAWN_HEIGHT)
 end
 
 -- Lateral centre of the drivable road at a given Z, for one lane.

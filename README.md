@@ -30,38 +30,48 @@ Driver had continuous input.
 ```
 roblox/
   README.md
-  Docs/                     Brief, DNA analysis, core-fun audit, playtest protocol
-  src/Shared/               Config, types, manifests, kits, live-ops, networking
+  Docs/                     Design intent; Docs/README.md says what is still current
+  src/Shared/               Config, types, tuning schema, manifests, kits, networking
   src/Server/               Fun-test lab, physics truck, depot, economy, persistence
-  src/Client/               Lab HUD and debug overlay, crew HUD, depot panel
-  Tests/StudioSmoke.luau    Engine-level smoke test, branches on DevConfig.Mode
+  src/Client/               UI kit, lab HUD and debug overlay, crew HUD, depot panel
+  Tests/                    Headless suite (Lune, in CI) and Studio smoke test
+  rokit.toml                Pinned toolchain
   default.project.json      Rojo project map
 ```
 
 ## Docs
 
-| Doc | Purpose |
-|---|---|
-| [Docs/CoreFunAudit_V0.md](Docs/CoreFunAudit_V0.md) | Why the prototype was not producing the fantasy, and what the fun-test build bypasses |
-| [Docs/PlaytestProtocol_V0.md](Docs/PlaytestProtocol_V0.md) | Four-player test script, what not to explain, go/no-go criteria |
-| [Docs/PrototypeBrief_CargoCatastrophe_V0.md](Docs/PrototypeBrief_CargoCatastrophe_V0.md) | Product pitch, loop, roles, exclusions, kill/go |
-| [Docs/TopGameDNA_V0.md](Docs/TopGameDNA_V0.md) | Top-10 structural audit and the patterns we adopted or declined |
-| [Docs/ValidationMetrics_V0.md](Docs/ValidationMetrics_V0.md) | What to measure in playtests |
-| [Docs/BuildChecklist_V0.md](Docs/BuildChecklist_V0.md) | Vertical-slice build checklist |
-| [Docs/VerticalSlice_CargoRun_V0.md](Docs/VerticalSlice_CargoRun_V0.md) | One-map build target (vehicle, route, failures) |
-| [Docs/SystemsReuseMap_V0.md](Docs/SystemsReuseMap_V0.md) | Cross-repo contracts adopted into this prototype |
+Start with [Docs/README.md](Docs/README.md), which sorts the eight design
+documents by whether they still describe the build. The two worth reading first
+are [Docs/CoreFunAudit_V0.md](Docs/CoreFunAudit_V0.md), on why the depot
+prototype was not producing the fantasy, and
+[Docs/PlaytestProtocol_V0.md](Docs/PlaytestProtocol_V0.md), which is the next
+thing that happens to the project.
 
 ## Tooling
 
-1. Install [Rojo](https://rojo.space/) (`rojo --version`).
-2. From this folder, either build a place or serve into Studio:
+The toolchain is pinned in `rokit.toml`. Install [Rokit](https://github.com/rojo-rbx/rokit),
+then from this folder:
 
 ```powershell
-rojo build default.project.json --output CargoCatastrophe.rbxlx
+rokit install
 rojo serve
 ```
 
-3. In Studio, connect the Rojo plugin to the serve session.
+Connect the Rojo plugin in Studio to the serve session, or build a place file
+directly:
+
+```powershell
+rojo build default.project.json --output CargoCatastrophe.rbxlx
+```
+
+Before pushing, run what CI runs:
+
+```powershell
+stylua src Tests
+selene src Tests
+lune run Tests/Headless.luau
+```
 
 **Enable DataStores before testing progression.** Game Settings → Security → *Enable Studio Access
 to API Services*. Without it the server runs profiles in volatile mode: everything works, nothing
@@ -110,6 +120,31 @@ Crew are welded into the chassis assembly rather than walking on it: humanoids
 do not stay on a platform moving at 60 studs per second. They therefore visibly
 sit at their stations, which is cosmetic debt to be repaid, not a design choice.
 
+### Tuning it without restarting
+
+`LabConfig` is read at the point of use — `PhysicsChassis:step` reads
+`LabConfig.GripFront` inside the wheel loop rather than hoisting it — so writing
+a new value into the table lands on the next frame. `TuningService` exploits
+that: select `ReplicatedStorage.LabTuning` in the Explorer and edit an attribute
+in the Properties pane. There is no bespoke tuning UI to maintain, because
+Studio already ships a perfectly good attribute editor.
+
+Two attributes are commands rather than values. `ACTION_Dump` prints the values
+you have moved, formatted to paste back into `LabConfig.lua`; `ACTION_Reset`
+restores the file defaults. `src/Shared/TuningSchema.lua` decides what is
+exposed and which values need a rig rebuild rather than taking effect live.
+
+The corner sits at roughly 6-19% of a 4,000 stud route, so the debug overlay
+(`F`) can warp the truck to a given route progress and rebuild the rig after a
+build-time constant changes. Tuning grip does not mean driving to the corner
+again.
+
+Each run then writes itself to `ServerStorage.LabRuns` as JSON: the input
+stream, the event timeline, the outcome, and the tuning values that produced it.
+Studio's output window is live-only, host-only and scrolls away; a run file can
+be compared against the run before it. Do not expect replay — Roblox's solver
+does not give determinism, so this is for comparison, not reproduction.
+
 ## The depot loop (`DevConfig.Mode = "Depot"`)
 
 The server is a **depot** with four bays. Each bay is one crew of up to four on its own parallel
@@ -145,17 +180,32 @@ brake instead of a strap only a Strapper could fix.
 
 ## Server layout
 
+### The spine
+
+These carry no opinion about trucks or cargo, and are the part of this repo
+worth copying into a second title. The game layer below is not.
+
+| Module | Responsibility |
+|---|---|
+| `src/Shared/DevConfig.lua` | The mode switch, and whether dev tooling is on |
+| `src/Server/LabSession.lua` | Session lifecycle: phases, join and leave, the step loop, snapshots |
+| `src/Shared/LabRemotes.lua` | Every remote declared with its payload type and a server-side validator |
+| `src/Shared/TuningSchema.lua`, `src/Server/TuningService.lua` | What is tunable, and live editing of it through attributes |
+| `src/Server/DevCommands.lua` | Warp, rebuild and dump, rate limited like any other remote |
+| `src/Server/LabTelemetry.lua` | Run timeline and the JSON artifact in `ServerStorage.LabRuns` |
+| `src/Shared/TokenBucket.lua`, `src/Server/RateLimiter.lua` | Throttling, split into engine-free maths and a Player-keyed wrapper |
+| `src/Shared/RouteMath.lua` | Arc-length progress and its inverse, dependency-free |
+| `src/Client/UIKit.lua` | Panels, labels and buttons, plus setters that skip unchanged writes |
+
 ### Fun-test build
 
 | Module | Responsibility |
 |---|---|
-| `src/Server/TruckLab.lua` | The whole fun-test session: phases, roles, remotes, restart |
+| `src/Server/TruckLab.lua` | Composition root: builds the route, owns one `LabSession`, wires dev commands |
 | `src/Server/PhysicsChassis.lua` | Raycast-suspension truck, grip, steering, impact and rollover |
 | `src/Server/CargoLoad.lua` | Roped crate, per-strap tension and health, derived condition |
 | `src/Server/StrapperStations.lua` | Station occupancy, committed traversals, counterweight, throws |
 | `src/Server/PressureDirector.lua` | Three pressure categories that perturb state, never outcomes |
-| `src/Server/LabTelemetry.lua` | Per-run event log printed to the server output |
-| `src/Server/RateLimiter.lua` | Token bucket in front of every client intent remote |
 
 ### Depot build
 
@@ -169,6 +219,15 @@ brake instead of a strap only a Strapper could fix.
 | `src/Server/CargoRig.lua` | One crew's truck |
 | `src/Server/FailureRunner.lua` | One crew's failure cadence |
 | `src/Server/RoleService.lua` | One crew's role assignment and kit effects |
+
+## Tests
+
+Two suites, split by whether they need Roblox running. `lune run Tests/Headless.luau`
+covers config invariants, route maths, bucket arithmetic and the tuning schema
+in a couple of seconds, and CI runs it on every push. The engine-dependent half
+is `require(game.ServerStorage.Tests.StudioSmoke).run()` from the Studio command
+bar after pressing Play. [Tests/README.md](Tests/README.md) has the split and
+which suite a new test belongs in.
 
 ## Out of scope (v0)
 

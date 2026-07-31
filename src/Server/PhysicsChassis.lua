@@ -520,13 +520,32 @@ function PhysicsChassis:getWheels()
 	return self.wheels
 end
 
-function PhysicsChassis:reset()
+--[[
+	Put the truck somewhere, upright and stationary, without touching damage or
+	wear. Zeroing velocity on both sides of the pivot is deliberate: the solver
+	will otherwise carry the pre-teleport velocity through the move and fling
+	the assembly.
+]]
+function PhysicsChassis:teleport(cframe: CFrame)
 	local chassis = self.chassis
 	chassis.AssemblyLinearVelocity = Vector3.zero
 	chassis.AssemblyAngularVelocity = Vector3.zero
-	self.model:PivotTo(self.route.startCFrame)
+	self.model:PivotTo(cframe)
 	chassis.AssemblyLinearVelocity = Vector3.zero
 	chassis.AssemblyAngularVelocity = Vector3.zero
+
+	-- Otherwise the next frame measures the teleport itself as an enormous
+	-- acceleration and books it as an impact.
+	self.lastVelocity = Vector3.zero
+	self.accelWorld = Vector3.zero
+	self.lateralAccel = 0
+	self.longitudinalAccel = 0
+	self.invertedFor = 0
+	self.lastImpact = os.clock()
+end
+
+function PhysicsChassis:reset()
+	self:teleport(self.route.startCFrame)
 
 	self.steerAngle = 0
 	self.integrity = LabConfig.MaxChassisIntegrity

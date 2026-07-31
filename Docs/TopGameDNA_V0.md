@@ -1,5 +1,15 @@
 # Top-10 Structural DNA vs. Cargo Catastrophe (V0)
 
+> **Partly superseded.** Sections 1, 2 and 4 — the competitor skeletons, the
+> twelve retention traits, and the patterns we are declining — are the durable
+> half and still stand.
+>
+> Section 3 describes the depot build (legs, bank-or-push, manifest rarity, four
+> bays, credits, streak). All of it is written and none of it boots by default:
+> `DevConfig.Mode` selects `FunTest`, because retention structure over a loop
+> nobody enjoys is worth nothing. Read section 3 as the plan for after the
+> playtest says the core is worth keeping, not as a description of the build.
+
 Snapshot: late July 2026. Ranks move weekly; the *skeletons* below move on the order of years,
 which is the only reason this document is worth writing. We are extracting structure, not content.
 

@@ -1,5 +1,18 @@
 # Systems Reuse Map V0
 
+> **Superseded. Historical only.**
+>
+> Every phase, enum and file listed below belongs to the depot build, which
+> `DevConfig.Mode` no longer selects by default. The fun-test build has its own
+> much shorter lifecycle (`Staging → Run → Result`) owned by
+> `src/Server/LabSession.lua`, and its own remotes in `src/Shared/LabRemotes.lua`.
+> The file-ownership table at the bottom predates `LabSession`, `TuningService`,
+> `DevCommands`, `UIKit` and `TokenBucket` and should not be used to find
+> anything.
+>
+> The "Never port" section is the part still worth reading, and the adopt /
+> adapt / skip framing is a good template if a second title reuses this spine.
+
 Cross-repo contracts adopted into Cargo Catastrophe as **Luau reimplementations**.  
 Rule: steal ownership rules, state machines, fail enums, HUD shapes — never port UE / Three.js / FlashCore engines.
 

@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to the same branch makes the first run's answer irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Format, lint, analyse, test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pinned toolchain
+        uses: CompeyDev/setup-rokit@v0.1.2
+        with:
+          cache: true
+
+      - name: Check formatting
+        run: stylua --check src Tests
+
+      - name: Generate Roblox standard library
+        run: selene generate-roblox-std
+
+      - name: Lint
+        run: selene src Tests
+
+      # luau-lsp resolves Rojo-style requires through the sourcemap, so
+      # `require(script.Parent.CargoLoad)` type checks the way Studio sees it.
+      - name: Generate sourcemap
+        run: rojo sourcemap default.project.json --include-non-scripts --output sourcemap.json
+
+      - name: Fetch Roblox type definitions
+        run: curl -fsSL "https://raw.githubusercontent.com/JohnnyMorganz/luau-lsp/main/scripts/globalTypes.d.luau" -o globalTypes.d.luau
+
+      - name: Type check
+        run: |
+          luau-lsp analyze \
+            --defs=globalTypes.d.luau \
+            --sourcemap=sourcemap.json \
+            --base-luaurc=.luaurc \
+            --no-strict-dm-types \
+            src
+
+      # The engine-dependent half lives in Tests/StudioSmoke.luau and cannot run
+      # here; see Tests/README.md.
+      - name: Headless tests
+        run: lune run Tests/Headless.luau
+
+      - name: Build place file
+        run: rojo build default.project.json --output CargoCatastrophe.rbxl

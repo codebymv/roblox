@@ -421,15 +421,28 @@ function CargoLoad:snapshotStraps(): { LabTypes.StrapSnapshot }
 	return list
 end
 
-function CargoLoad:reset()
+--[[
+	Put the crate back on the bed and stop it moving, leaving strap health,
+	wear and breakage exactly as they were. This is what a warp needs: the
+	truck has jumped, so the load has to come with it, but the accumulated
+	damage is the state being tuned and must survive.
+]]
+function CargoLoad:reseat()
 	local body = self.chassisRig:getChassis()
 	local crate = self.crate
+	if not crate or not body then
+		return
+	end
 
 	crate.AssemblyLinearVelocity = Vector3.zero
 	crate.AssemblyAngularVelocity = Vector3.zero
 	crate.CFrame = body.CFrame * CFrame.new(LabConfig.CrateHome)
 	crate.AssemblyLinearVelocity = Vector3.zero
 	crate.AssemblyAngularVelocity = Vector3.zero
+end
+
+function CargoLoad:reset()
+	self:reseat()
 
 	for _, id in LabConfig.StrapOrder do
 		local strap = self.straps[id]

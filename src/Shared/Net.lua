@@ -1,6 +1,7 @@
 --!strict
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local FOLDER_NAME = "CargoCatastropheRemotes"
 
@@ -36,22 +37,49 @@ local REMOTE_NAMES = {
 	LabWork = "LabWork",
 	LabRestart = "LabRestart",
 	LabSwitchRole = "LabSwitchRole",
+	LabDevCommand = "LabDevCommand",
 }
 
 local Net = {
 	Names = REMOTE_NAMES,
 }
 
+--[[
+	Both the folder and each remote are cached after first resolution. Net.get
+	used to walk ReplicatedStorage on every call, which the snapshot broadcast
+	and every toast paid for.
+
+	Only the server may create the folder. The client waiting for replication
+	is correct; the client creating its own empty folder is not, and the old
+	code did exactly that whenever a client got here before replication landed,
+	leaving it waiting on a remote that would never arrive.
+]]
+local isServer = RunService:IsServer()
+
+local cachedFolder: Folder? = nil
+local cachedRemotes: { [string]: RemoteEvent } = {}
+
 local function getFolder(): Folder
-	local folder = ReplicatedStorage:FindFirstChild(FOLDER_NAME)
-	if folder and folder:IsA("Folder") then
-		return folder
+	local cached = cachedFolder
+	if cached and cached.Parent then
+		return cached
 	end
 
-	local created = Instance.new("Folder")
-	created.Name = FOLDER_NAME
-	created.Parent = ReplicatedStorage
-	return created
+	local found = ReplicatedStorage:FindFirstChild(FOLDER_NAME)
+	if not found then
+		if isServer then
+			local created = Instance.new("Folder")
+			created.Name = FOLDER_NAME
+			created.Parent = ReplicatedStorage
+			found = created
+		else
+			found = ReplicatedStorage:WaitForChild(FOLDER_NAME, 20)
+		end
+	end
+
+	assert(found and found:IsA("Folder"), "Remote folder never replicated: " .. FOLDER_NAME)
+	cachedFolder = found
+	return found
 end
 
 function Net.ensureServer(): Folder
@@ -67,9 +95,15 @@ function Net.ensureServer(): Folder
 end
 
 function Net.get(name: string): RemoteEvent
+	local cached = cachedRemotes[name]
+	if cached and cached.Parent then
+		return cached
+	end
+
 	local folder = getFolder()
 	local remote = folder:WaitForChild(name, 10)
 	assert(remote and remote:IsA("RemoteEvent"), "Missing RemoteEvent: " .. name)
+	cachedRemotes[name] = remote
 	return remote
 end
 

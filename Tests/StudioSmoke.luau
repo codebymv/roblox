@@ -1,9 +1,27 @@
--- Engine-level smoke test.
--- Run with Roblox Studio's `--task RunScript` against the built local place.
---
--- The suite branches on DevConfig.Mode, because the two builds share almost no
--- runtime. Shared modules and pure functions are checked either way; the world
--- assertions check whichever world Bootstrap actually built.
+--[[
+	The half of the test suite that needs Roblox running.
+
+		1. Press Play in Studio and wait for the world to build.
+		2. Open the command bar and run:
+
+			require(game.ServerStorage.Tests.StudioSmoke).run()
+
+	Everything here depends on something only the engine provides: a DataModel,
+	the physics solver, replication, or a module that reaches for a service at
+	require time. Pure logic does not belong in this file -- it belongs in
+	Tests/Headless.luau, which CI runs on every push in a couple of seconds.
+	Tests/README.md has the full split.
+
+	If you are about to add an assertion here, check first whether the thing it
+	tests could be engine-free. Config invariants, arc-length maths and token
+	bucket arithmetic all used to live in this file and all moved out.
+
+	This is a module rather than a Script so that syncing it into the place does
+	not run it on every Play; run is called explicitly, once the world exists.
+	It branches on DevConfig.Mode, because the two builds share almost no
+	runtime. Shared modules are checked either way; the world assertions check
+	whichever world Bootstrap actually built.
+]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
@@ -21,88 +39,53 @@ local MatchConfig = require(shared:WaitForChild("MatchConfig"))
 local Net = require(shared:WaitForChild("Net"))
 local RoleKits = require(shared:WaitForChild("RoleKits"))
 local Roles = require(shared:WaitForChild("Roles"))
+local TuningSchema = require(shared:WaitForChild("TuningSchema"))
 
 local EconomyService = require(server:WaitForChild("EconomyService"))
 local RateLimiter = require(server:WaitForChild("RateLimiter"))
-local WorldBuilder = require(server:WaitForChild("WorldBuilder"))
+
+local StudioSmoke = {}
 
 --------------------------------------------------------------------------------
 -- Shared: always checked
 --------------------------------------------------------------------------------
 
--- Roles ------------------------------------------------------------------
-assert(#Roles.assign(1) == 1, "Solo should receive one role")
-assert(#Roles.assign(4) == 4, "Full party should receive four roles")
+local function checkShared()
+	-- Roles ------------------------------------------------------------------
+	assert(#Roles.assign(1) == 1, "Solo should receive one role")
+	assert(#Roles.assign(4) == 4, "Full party should receive four roles")
 
-local driverOnly = { Driver = true }
-for _ = 1, 20 do
-	local picked = Failures.pickRandom(Random.new(), driverOnly, "SharpTurn")
-	assert(picked and picked.responsibleRole == "Driver", "Role-filtered deck selected an absent role")
-end
+	local driverOnly = { Driver = true }
+	for _ = 1, 20 do
+		local picked = Failures.pickRandom(Random.new(), driverOnly, "SharpTurn")
+		assert(picked and picked.responsibleRole == "Driver", "Role-filtered deck selected an absent role")
+	end
 
--- Networking -------------------------------------------------------------
-local remotes = Net.ensureServer()
-for _, name in pairs(Net.Names) do
-	assert(remotes:FindFirstChild(name), "Missing remote: " .. name)
-end
+	-- Networking ---------------------------------------------------------
+	local remotes = Net.ensureServer()
+	for _, name in pairs(Net.Names) do
+		assert(remotes:FindFirstChild(name), "Missing remote: " .. name)
+	end
 
--- Rate limiter -----------------------------------------------------------
-do
-	local limiter = RateLimiter.new(1, 3)
-	local fake = { UserId = -998877 }
-	assert(limiter:allow(fake), "Burst token 1 should pass")
-	assert(limiter:allow(fake), "Burst token 2 should pass")
-	assert(limiter:allow(fake), "Burst token 3 should pass")
-	assert(not limiter:allow(fake), "Bucket should be empty after the burst")
-end
-
--- Lab config consistency -------------------------------------------------
-for _, id in LabConfig.StrapOrder do
-	assert(LabConfig.StrapRailLocal[id], "Strap has no rail anchor: " .. id)
-	assert(LabConfig.StrapCrateLocal[id], "Strap has no crate anchor: " .. id)
-end
-for _, id in LabConfig.StationOrder do
-	assert(LabConfig.StationLocal[id], "Station has no local CFrame: " .. id)
-	assert(LabConfig.StrapRailLocal[id], "Every station must map to a strap: " .. id)
-end
-assert(
-	LabConfig.ShiftedOffset < LabConfig.SlidingOffset
-		and LabConfig.SlidingOffset < LabConfig.HangingOffset
-		and LabConfig.HangingOffset < LabConfig.LostOffset,
-	"Cargo offset thresholds must be strictly increasing"
-)
-assert(
-	LabConfig.LeaningAngleDeg < LabConfig.HangingAngleDeg,
-	"Lean thresholds must be increasing"
-)
-assert(LabConfig.surface("Shoulder").grip < LabConfig.surface("Road").grip, "Shoulder must have less grip")
-assert(LabConfig.surface("Nonsense").grip == LabConfig.surface("Road").grip, "Unknown surface should fall back to road")
-
--- Route arc length is real progress, not a single world axis ---------------
-do
-	local route = {
-		points = {
-			Vector3.new(0, 0, 0),
-			Vector3.new(0, 0, 100),
-			Vector3.new(100, 0, 100),
-		},
-		cumulative = { 0, 100, 200 },
-		totalLength = 200,
-	}
-	assert(WorldBuilder.labProgress(route, Vector3.new(0, 0, 0)) < 0.01, "Start should be zero progress")
-	local halfway = WorldBuilder.labProgress(route, Vector3.new(0, 0, 100))
-	assert(math.abs(halfway - 0.5) < 0.02, "Corner should be halfway, got " .. tostring(halfway))
-	-- The second leg runs along X. A Z-only progress metric would report 0.5
-	-- here, which is exactly the bug the arc-length version replaces.
-	local past = WorldBuilder.labProgress(route, Vector3.new(60, 0, 100))
-	assert(past > 0.75, "Progress must follow the road round a corner, got " .. tostring(past))
+	-- Rate limiter -------------------------------------------------------
+	-- The bucket arithmetic is covered headlessly. What needs the engine is
+	-- the part that keys on a Player and the PlayerRemoving connection.
+	local limiter = RateLimiter.new(1, 2)
+	local one = { UserId = -998877 }
+	local two = { UserId = -998878 }
+	assert(limiter:allow(one) and limiter:allow(one), "Burst should pass")
+	assert(not limiter:allow(one), "Bucket should be empty after the burst")
+	assert(limiter:allow(two), "A different player must have their own bucket")
+	limiter:destroy()
+	assert(limiter:allow(one), "Destroy should clear the buckets")
+	limiter:destroy()
 end
 
 --------------------------------------------------------------------------------
--- Mode-specific
+-- Fun-test world
 --------------------------------------------------------------------------------
 
-if DevConfig.isFunTest() then
+local function checkFunTest()
 	-- The fun-test world is built by TruckLab during Bootstrap. Rebuilding it
 	-- here would destroy the live one out from under the running simulation, so
 	-- this section inspects what is already there.
@@ -155,39 +138,35 @@ if DevConfig.isFunTest() then
 		Vector3.new(localOffset.X, 0, localOffset.Z).Magnitude < LabConfig.SlidingOffset,
 		"Crate drifted off the bed while parked"
 	)
-else
+
+	-- Live tuning ----------------------------------------------------------
+	-- The schema is checked headlessly; what needs the engine is whether every
+	-- declared knob actually reached an attribute you can edit in Studio.
+	if DevConfig.isDevToolingEnabled() then
+		local tuning = ReplicatedStorage:WaitForChild("LabTuning", 5)
+		assert(tuning, "Tuning folder was not published")
+		for _, entry in TuningSchema.Entries do
+			assert(tuning:GetAttribute(entry.attribute) ~= nil, "Tunable not mirrored: " .. entry.attribute)
+		end
+	end
+end
+
+--------------------------------------------------------------------------------
+-- Depot world
+--------------------------------------------------------------------------------
+
+local function checkDepot()
 	local CargoRig = require(server:WaitForChild("CargoRig"))
 	local DepotService = require(server:WaitForChild("DepotService"))
 	local FailureRunner = require(server:WaitForChild("FailureRunner"))
 
-	-- Leg ladder curves --------------------------------------------------
-	assert(
-		MatchConfig.legDuration(1) > MatchConfig.legDuration(4),
-		"Legs should get shorter as the convoy pushes"
-	)
-	assert(
-		MatchConfig.legDuration(50) == MatchConfig.LegMinDurationSeconds,
-		"Leg duration should clamp at the floor"
-	)
-	assert(
-		MatchConfig.legPressure(5) > MatchConfig.legPressure(1),
-		"Pressure should rise with leg number"
-	)
-	assert(
-		MatchConfig.legPressure(500) <= MatchConfig.LegMaxPressure,
-		"Pressure should clamp at the ceiling"
-	)
+	-- Economy ------------------------------------------------------------
+	-- The leg duration and pressure ladders are covered headlessly.
 	assert(EconomyService.multiplierForLeg(1) == 1, "Leg 1 must be a 1x multiplier")
-	assert(
-		EconomyService.legValue(3, nil) > EconomyService.legValue(1, nil),
-		"Deeper legs must be worth more"
-	)
-	assert(
-		type(EconomyService.equipPaint) == "function",
-		"equipPaint must exist so equipping cannot spend credits"
-	)
+	assert(EconomyService.legValue(3, nil) > EconomyService.legValue(1, nil), "Deeper legs must be worth more")
+	assert(type(EconomyService.equipPaint) == "function", "equipPaint must exist so equipping cannot spend credits")
 
-	-- Manifest -----------------------------------------------------------
+	-- Manifest -------------------------------------------------------------
 	local rng = Random.new(1234)
 	for _ = 1, 400 do
 		local def = CargoManifest.roll(rng, 1)
@@ -203,7 +182,7 @@ else
 	assert(jackpotSeen, "Jackpot cargo never appeared on a deep leg")
 	assert(CargoManifest.count() >= 8, "Manifest deck is suspiciously small")
 
-	-- Role kits ----------------------------------------------------------
+	-- Role kits ------------------------------------------------------------
 	for _, roleId in { "Driver", "Strapper", "Spotter", "Repair" } do
 		local starterId = RoleKits.starterFor(roleId)
 		assert(starterId, "Role has no starter kit: " .. roleId)
@@ -216,7 +195,7 @@ else
 	local event = LiveOps.getActive()
 	assert(event and event.payoutMultiplier > 0, "LiveOps returned no active event")
 
-	-- Rig ----------------------------------------------------------------
+	-- Rig ------------------------------------------------------------------
 	local testFolder = Instance.new("Folder")
 	testFolder.Name = "SmokeTestLane"
 	testFolder.Parent = Workspace
@@ -258,7 +237,7 @@ else
 	rig:destroy()
 	testFolder:Destroy()
 
-	-- Failure runner -------------------------------------------------------
+	-- Failure runner ---------------------------------------------------------
 	local prompts, resolutions, cascades = 0, 0, 0
 	local runner = FailureRunner.new({
 		onPrompt = function()
@@ -278,7 +257,7 @@ else
 	assert(prompts == 1 and resolutions == 1 and cascades == 0, "Failure callback counts were incorrect")
 	runner:stop()
 
-	-- Depot ----------------------------------------------------------------
+	-- Depot ------------------------------------------------------------------
 	assert(type(DepotService.getCrewFor) == "function", "DepotService did not load")
 	local depot = Workspace:FindFirstChild("CargoPrototype")
 	assert(depot, "Depot world was not built")
@@ -289,4 +268,17 @@ else
 	end
 end
 
-print("STUDIO_SMOKE_OK (" .. DevConfig.Mode .. ")")
+function StudioSmoke.run()
+	checkShared()
+
+	if DevConfig.isFunTest() then
+		checkFunTest()
+	else
+		checkDepot()
+	end
+
+	print("STUDIO_SMOKE_OK (" .. DevConfig.Mode .. ")")
+	return true
+end
+
+return StudioSmoke

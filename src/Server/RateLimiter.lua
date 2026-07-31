@@ -6,52 +6,54 @@
 	Every client-to-server remote in this project accepted unlimited calls. Most
 	handlers are cheap, but the ones that spawn a task.delay per call are not,
 	so intent remotes get a bucket in front of them.
+
+	The arithmetic lives in Shared/TokenBucket, which has no engine dependency
+	and is covered by the headless tests. What is left here is the part that
+	genuinely needs Roblox: mapping a Player to a key, and forgetting the bucket
+	when they leave.
 ]]
 
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local TokenBucket = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("TokenBucket"))
 
 local RateLimiter = {}
 RateLimiter.__index = RateLimiter
 
-export type Bucket = { tokens: number, updatedAt: number }
-
 export type RateLimiter = typeof(setmetatable(
-	{} :: { rate: number, burst: number, buckets: { [number]: Bucket } },
+	{} :: {
+		bucket: TokenBucket.TokenBucket,
+		connection: RBXScriptConnection?,
+	},
 	RateLimiter
 ))
 
 function RateLimiter.new(ratePerSecond: number, burst: number): RateLimiter
 	local self = setmetatable({
-		rate = ratePerSecond,
-		burst = burst,
-		buckets = {} :: { [number]: Bucket },
+		bucket = TokenBucket.new(ratePerSecond, burst),
+		connection = nil :: RBXScriptConnection?,
 	}, RateLimiter)
 
-	Players.PlayerRemoving:Connect(function(player: Player)
-		self.buckets[player.UserId] = nil
+	self.connection = Players.PlayerRemoving:Connect(function(player: Player)
+		self.bucket:forget(player.UserId)
 	end)
 
 	return self
 end
 
 function RateLimiter.allow(self: RateLimiter, player: Player): boolean
-	local now = os.clock()
-	local bucket = self.buckets[player.UserId]
+	return self.bucket:allow(player.UserId)
+end
 
-	if not bucket then
-		self.buckets[player.UserId] = { tokens = self.burst - 1, updatedAt = now }
-		return true
+-- Owners that can be torn down and rebuilt need this, or every rebuild leaves
+-- another live PlayerRemoving handler behind.
+function RateLimiter.destroy(self: RateLimiter)
+	if self.connection then
+		self.connection:Disconnect()
+		self.connection = nil
 	end
-
-	bucket.tokens = math.min(self.burst, bucket.tokens + (now - bucket.updatedAt) * self.rate)
-	bucket.updatedAt = now
-
-	if bucket.tokens < 1 then
-		return false
-	end
-
-	bucket.tokens -= 1
-	return true
+	self.bucket:clear()
 end
 
 return RateLimiter

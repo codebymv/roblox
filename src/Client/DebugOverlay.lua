@@ -15,7 +15,11 @@ local UserInputService = game:GetService("UserInputService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local DevConfig = require(Shared:WaitForChild("DevConfig"))
 local LabConfig = require(Shared:WaitForChild("LabConfig"))
+local LabRemotes = require(Shared:WaitForChild("LabRemotes"))
+local LabTypes = require(Shared:WaitForChild("LabTypes"))
 local Net = require(Shared:WaitForChild("Net"))
+
+local UIKit = require(script.Parent.UIKit)
 
 local DebugOverlay = {}
 
@@ -26,45 +30,72 @@ local function bar(value: number, width: number): string
 	return string.rep("#", filled) .. string.rep(".", width - filled)
 end
 
+--[[
+	Tuning keybinds. Separate from the overlay panel on purpose: warping to the
+	corner is useful whether or not the numbers are on screen, and the overlay
+	gets switched off for real playtests while these stay available to whoever
+	is running the session.
+]]
+local function bindDevCommands()
+	if not DevConfig.isDevToolingEnabled() then
+		return
+	end
+
+	local progress = 0
+
+	LabRemotes.onClient(Net.Names.LabSnapshot, function(snap: LabTypes.LabSnapshot)
+		progress = snap.routeProgress
+	end)
+
+	UserInputService.InputBegan:Connect(function(input: InputObject, processed: boolean)
+		if processed then
+			return
+		end
+		local command = Net.Names.LabDevCommand
+		if input.KeyCode == Enum.KeyCode.LeftBracket then
+			LabRemotes.fireServer(command, { command = "warpStep", from = progress, direction = -1 })
+		elseif input.KeyCode == Enum.KeyCode.RightBracket then
+			LabRemotes.fireServer(command, { command = "warpStep", from = progress, direction = 1 })
+		elseif input.KeyCode == Enum.KeyCode.BackSlash then
+			LabRemotes.fireServer(command, { command = "rebuild" })
+		elseif input.KeyCode == Enum.KeyCode.P then
+			LabRemotes.fireServer(command, { command = "dump" })
+		end
+	end)
+end
+
 function DebugOverlay.mount()
+	bindDevCommands()
+
 	if not DevConfig.ShowDebugOverlay then
 		return
 	end
 
 	local player = Players.LocalPlayer
 
-	local gui = Instance.new("ScreenGui")
-	gui.Name = "CargoLabDebug"
-	gui.ResetOnSpawn = false
-	gui.IgnoreGuiInset = true
-	gui.Parent = player:WaitForChild("PlayerGui")
+	local gui = UIKit.screen("CargoLabDebug", player:WaitForChild("PlayerGui"))
 
-	local frame = Instance.new("Frame")
-	frame.Name = "Panel"
-	frame.AnchorPoint = Vector2.new(0, 1)
-	frame.Position = UDim2.new(0, 16, 1, -158)
-	frame.Size = UDim2.fromOffset(360, 258)
-	frame.BackgroundColor3 = Color3.fromRGB(8, 10, 14)
-	frame.BackgroundTransparency = 0.2
-	frame.BorderSizePixel = 0
-	frame.Parent = gui
+	local frame = UIKit.panel({
+		Name = "Panel",
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 16, 1, -158),
+		Size = UDim2.fromOffset(360, 258),
+		BackgroundColor3 = Color3.fromRGB(8, 10, 14),
+		BackgroundTransparency = 0.2,
+		Parent = gui,
+	})
 
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 6)
-	corner.Parent = frame
-
-	local text = Instance.new("TextLabel")
-	text.Name = "Text"
-	text.Position = UDim2.fromOffset(10, 8)
-	text.Size = UDim2.new(1, -20, 1, -16)
-	text.BackgroundTransparency = 1
-	text.Font = Enum.Font.Code
-	text.TextSize = 13
-	text.TextColor3 = Color3.fromRGB(150, 235, 175)
-	text.TextXAlignment = Enum.TextXAlignment.Left
-	text.TextYAlignment = Enum.TextYAlignment.Top
-	text.Text = "waiting for debug feed (F to toggle)"
-	text.Parent = frame
+	local text = UIKit.label({
+		Name = "Text",
+		Position = UDim2.fromOffset(10, 8),
+		Size = UDim2.new(1, -20, 1, -16),
+		Font = Enum.Font.Code,
+		TextSize = 13,
+		TextColor3 = Color3.fromRGB(150, 235, 175),
+		TextYAlignment = Enum.TextYAlignment.Top,
+		Text = "waiting for debug feed (F to toggle)",
+		Parent = frame,
+	})
 
 	UserInputService.InputBegan:Connect(function(input: InputObject, processed: boolean)
 		if not processed and input.KeyCode == Enum.KeyCode.F then
@@ -72,8 +103,8 @@ function DebugOverlay.mount()
 		end
 	end)
 
-	Net.get(Net.Names.LabDebug).OnClientEvent:Connect(function(snap: any)
-		if typeof(snap) ~= "table" or not frame.Visible then
+	LabRemotes.onClient(Net.Names.LabDebug, function(snap: LabTypes.DebugSnapshot)
+		if not frame.Visible then
 			return
 		end
 
@@ -136,7 +167,7 @@ function DebugOverlay.mount()
 		table.insert(lines, "pressure  " .. tostring(snap.activePressure))
 		table.insert(lines, "cause     " .. tostring(snap.lastCause))
 
-		text.Text = table.concat(lines, "\n")
+		UIKit.setText(text, table.concat(lines, "\n"))
 	end)
 end
 

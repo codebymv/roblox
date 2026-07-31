@@ -11,23 +11,37 @@
 	of: a role that never acts, and a run where nothing physically happened.
 ]]
 
+local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerStorage = game:GetService("ServerStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local DevConfig = require(Shared:WaitForChild("DevConfig"))
+
+local TuningService = require(script.Parent.TuningService)
+
+local ARTIFACT_FOLDER = "LabRuns"
+local ARTIFACT_SCHEMA = 1
+
+-- Roughly five minutes at the sample rate below. A guard against a run that is
+-- left going, not an expected limit.
+local MAX_INPUT_SAMPLES = 4000
 
 local LabTelemetry = {}
 LabTelemetry.__index = LabTelemetry
 
 function LabTelemetry.new()
-	local self = setmetatable({}, LabTelemetry)
+	local self = setmetatable({ runIndex = 0 }, LabTelemetry)
 	self:reset()
 	return self
 end
 
 function LabTelemetry:reset()
+	self.runIndex += 1
 	self.runStart = os.clock()
+	self.startedAt = os.time()
 	self.events = {}
+	self.inputSamples = {}
 	self.perPlayer = {}
 	self.conditionChanges = 0
 	self.recoveries = 0
@@ -82,6 +96,27 @@ function LabTelemetry:noteMovement()
 		self.firstMovementAt = os.clock() - self.runStart
 		self:log("first_movement")
 	end
+end
+
+--[[
+	A coarse trace of what the driver was doing and what the truck did about
+	it. Not enough to reproduce a run -- Roblox's solver is not deterministic,
+	so replaying these inputs gives a similar run, never the same one -- but
+	enough to answer "was the driver hard on the brakes before that strap
+	went?" after the fact.
+]]
+function LabTelemetry:noteDriveSample(throttle: number, steering: number, braking: boolean, speed: number, progress: number)
+	if not DevConfig.Telemetry or #self.inputSamples >= MAX_INPUT_SAMPLES then
+		return
+	end
+	table.insert(self.inputSamples, {
+		t = math.floor((os.clock() - self.runStart) * 10) / 10,
+		th = math.floor(throttle * 100) / 100,
+		st = math.floor(steering * 100) / 100,
+		br = braking,
+		sp = math.floor(speed),
+		pr = math.floor(progress * 1000) / 1000,
+	})
 end
 
 function LabTelemetry:noteAction(name: string, action: string)
@@ -163,6 +198,93 @@ function LabTelemetry:noteEmergentCascade(detail: string)
 	end
 end
 
+--[[
+	The run as data rather than as a wall of text.
+
+	The printed summary is fine while you are sitting in front of the output
+	window, and useless an hour later or on somebody else's machine. This
+	writes each run to ServerStorage as JSON, where it survives the run ending,
+	survives the output window being cleared, and can be copied out of the
+	Explorer after the session to diff two tuning passes against each other.
+
+	The tuning block is the important part: a run is close to meaningless
+	unless you know which truck produced it.
+]]
+function LabTelemetry:_writeArtifact(outcome: string, crateSaved: boolean, duration: number)
+	if not DevConfig.RunArtifacts then
+		return
+	end
+
+	local crew = {}
+	for _, entry in self.perPlayer do
+		table.insert(crew, {
+			name = entry.name,
+			role = entry.role,
+			actions = entry.actions,
+			moves = entry.moves,
+			idleSeconds = math.floor(entry.idleSeconds * 10) / 10,
+		})
+	end
+	table.sort(crew, function(a, b)
+		return a.name < b.name
+	end)
+
+	local artifact = {
+		schema = ARTIFACT_SCHEMA,
+		runIndex = self.runIndex,
+		startedAt = self.startedAt,
+		outcome = outcome,
+		crateSaved = crateSaved,
+		duration = math.floor(duration * 10) / 10,
+		metrics = {
+			timeToInput = self.firstInputAt,
+			timeToMovement = self.firstMovementAt,
+			timeToCrisis = self.firstCrisisAt,
+			worstCondition = self.worstCondition,
+			conditionChanges = self.conditionChanges,
+			recoveries = self.recoveries,
+			strapBreaks = self.strapBreaks,
+			strapRefits = self.strapRefits,
+			stationMoves = self.stationMoves,
+			throws = self.throws,
+			pressureEvents = self.pressureEvents,
+			designedCascade = self.designedCascade,
+			emergentCascade = self.emergentCascade,
+		},
+		crew = crew,
+		timeline = self.events,
+		inputs = self.inputSamples,
+		tuning = TuningService.changedValues(),
+	}
+
+	local ok, encoded = pcall(function()
+		return HttpService:JSONEncode(artifact)
+	end)
+	if not ok then
+		warn("[CargoLab] could not encode run artifact: " .. tostring(encoded))
+		return
+	end
+
+	local folder = ServerStorage:FindFirstChild(ARTIFACT_FOLDER)
+	if not folder then
+		folder = Instance.new("Folder")
+		folder.Name = ARTIFACT_FOLDER
+		folder.Parent = ServerStorage
+	end
+
+	local value = Instance.new("StringValue")
+	value.Name = string.format("Run_%03d_%s", self.runIndex, outcome)
+	value.Value = encoded
+	value.Parent = folder
+
+	print(string.format(
+		"[CargoLab] run artifact written to ServerStorage.%s.%s (%d bytes)",
+		ARTIFACT_FOLDER,
+		value.Name,
+		#encoded
+	))
+end
+
 function LabTelemetry:finish(outcome: string, crateSaved: boolean)
 	if not DevConfig.Telemetry then
 		return
@@ -210,6 +332,8 @@ function LabTelemetry:finish(outcome: string, crateSaved: boolean)
 	table.insert(lines, "=========================")
 
 	print(table.concat(lines, "\n"))
+
+	self:_writeArtifact(outcome, crateSaved, duration)
 end
 
 return LabTelemetry

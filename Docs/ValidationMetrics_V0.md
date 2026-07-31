@@ -1,5 +1,16 @@
 # Validation Metrics — Cargo Catastrophe V0
 
+> **Partly superseded.** The first table and the vertical-slice targets are what
+> the next playtest measures, and [PlaytestProtocol_V0.md](PlaytestProtocol_V0.md)
+> is the script for collecting them.
+>
+> The *Ladder and retention metrics* table needs the depot build, which does not
+> boot by default, and D1/D7 needs a live audience rather than a playtest group.
+> Neither is measurable yet. Note also that this document predates run
+> artifacts: `LabTelemetry` now writes each fun-test run to
+> `ServerStorage.LabRuns` as JSON, so the fun-test numbers come out of the run
+> file rather than off a stopwatch.
+
 Measure only what tests the central hypothesis:
 
 > Friend-group co-op + readable cascading failure produces replay and invites without economy or content farms.

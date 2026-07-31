@@ -18,12 +18,16 @@ local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local LabConfig = require(Shared:WaitForChild("LabConfig"))
+local LabRemotes = require(Shared:WaitForChild("LabRemotes"))
+local LabTypes = require(Shared:WaitForChild("LabTypes"))
 local Net = require(Shared:WaitForChild("Net"))
+
+local UIKit = require(script.Parent.UIKit)
 
 local LabUI = {}
 
 local player = Players.LocalPlayer
-local latest = nil
+local latest: LabTypes.LabSnapshot? = nil
 
 local CONDITION_COLOR = {
 	Secure = Color3.fromRGB(90, 210, 120),
@@ -52,25 +56,15 @@ local touchForward, touchReverse, touchLeft, touchRight, touchBrake = false, fal
 local working = false
 local driveAccumulator = 0
 
-local driveRemote, moveRemote, workRemote, restartRemote, switchRemote
-
 -- ------------------------------------------------------------- ui helpers
 
+--[[
+	Positional wrappers over UIKit. The construction and the palette live in
+	UIKit; these exist only because this file's call sites read better with
+	fixed argument order than with a props table.
+]]
 local function panel(parent: Instance, name: string, position: UDim2, size: UDim2): Frame
-	local frame = Instance.new("Frame")
-	frame.Name = name
-	frame.Position = position
-	frame.Size = size
-	frame.BackgroundColor3 = Color3.fromRGB(16, 18, 22)
-	frame.BackgroundTransparency = 0.25
-	frame.BorderSizePixel = 0
-	frame.Parent = parent
-
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 8)
-	corner.Parent = frame
-
-	return frame
+	return UIKit.panel({ Name = name, Position = position, Size = size, Parent = parent })
 end
 
 local function label(
@@ -82,39 +76,19 @@ local function label(
 	textSize: number,
 	font: Enum.Font
 ): TextLabel
-	local element = Instance.new("TextLabel")
-	element.Name = name
-	element.Position = position
-	element.Size = size
-	element.BackgroundTransparency = 1
-	element.Font = font
-	element.TextSize = textSize
-	element.TextColor3 = Color3.fromRGB(235, 235, 235)
-	element.TextXAlignment = Enum.TextXAlignment.Left
-	element.Text = text
-	element.Parent = parent
-	return element
+	return UIKit.label({
+		Name = name,
+		Position = position,
+		Size = size,
+		Text = text,
+		TextSize = textSize,
+		Font = font,
+		Parent = parent,
+	})
 end
 
 local function button(parent: Instance, name: string, position: UDim2, size: UDim2, text: string): TextButton
-	local element = Instance.new("TextButton")
-	element.Name = name
-	element.Position = position
-	element.Size = size
-	element.BackgroundColor3 = Color3.fromRGB(48, 54, 64)
-	element.BorderSizePixel = 0
-	element.AutoButtonColor = true
-	element.Font = Enum.Font.GothamBold
-	element.TextSize = 16
-	element.TextColor3 = Color3.fromRGB(240, 240, 240)
-	element.Text = text
-	element.Parent = parent
-
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 6)
-	corner.Parent = element
-
-	return element
+	return UIKit.button({ Name = name, Position = position, Size = size, Text = text, Parent = parent })
 end
 
 -- --------------------------------------------------------------- build ui
@@ -133,41 +107,42 @@ local function buildStrapPanel(parent: Instance)
 	for index, id in LabConfig.StrapOrder do
 		local y = 34 + (index - 1) * 32
 
-		local row = Instance.new("Frame")
-		row.Name = id
-		row.Position = UDim2.fromOffset(12, y)
-		row.Size = UDim2.new(1, -24, 0, 26)
-		row.BackgroundTransparency = 1
-		row.Parent = frame
+		local row = UIKit.frame({
+			Name = id,
+			Position = UDim2.fromOffset(12, y),
+			Size = UDim2.new(1, -24, 0, 26),
+			BackgroundTransparency = 1,
+			Parent = frame,
+		})
 
 		local tag = label(row, "Tag", UDim2.fromOffset(0, 0), UDim2.fromOffset(30, 26), id, 15, Enum.Font.GothamBold)
 
-		local track = Instance.new("Frame")
-		track.Name = "Track"
-		track.Position = UDim2.fromOffset(34, 7)
-		track.Size = UDim2.fromOffset(118, 12)
-		track.BackgroundColor3 = Color3.fromRGB(40, 44, 52)
-		track.BorderSizePixel = 0
-		track.Parent = row
+		local track = UIKit.frame({
+			Name = "Track",
+			Position = UDim2.fromOffset(34, 7),
+			Size = UDim2.fromOffset(118, 12),
+			BackgroundColor3 = Color3.fromRGB(40, 44, 52),
+			Parent = row,
+		})
 
-		local fill = Instance.new("Frame")
-		fill.Name = "Fill"
-		fill.Size = UDim2.fromScale(1, 1)
-		fill.BackgroundColor3 = Color3.fromRGB(90, 210, 120)
-		fill.BorderSizePixel = 0
-		fill.Parent = track
+		local fill = UIKit.frame({
+			Name = "Fill",
+			Size = UDim2.fromScale(1, 1),
+			BackgroundColor3 = UIKit.Theme.Good,
+			Parent = track,
+		})
 
 		-- Tension sits on top of health, so a bar that is full but glowing is a
 		-- strap that is fine right now and about to stop being fine.
-		local tension = Instance.new("Frame")
-		tension.Name = "Tension"
-		tension.AnchorPoint = Vector2.new(0, 1)
-		tension.Position = UDim2.new(0, 0, 1, 0)
-		tension.Size = UDim2.new(0, 0, 0, 4)
-		tension.BackgroundColor3 = Color3.fromRGB(255, 235, 120)
-		tension.BorderSizePixel = 0
-		tension.ZIndex = 2
-		tension.Parent = track
+		local tension = UIKit.frame({
+			Name = "Tension",
+			AnchorPoint = Vector2.new(0, 1),
+			Position = UDim2.new(0, 0, 1, 0),
+			Size = UDim2.new(0, 0, 0, 4),
+			BackgroundColor3 = Color3.fromRGB(255, 235, 120),
+			ZIndex = 2,
+			Parent = track,
+		})
 
 		local status = label(
 			row,
@@ -197,49 +172,36 @@ local function buildControls(parent: Instance)
 			tostring(index) .. "  " .. id
 		)
 		element.Activated:Connect(function()
-			moveRemote:FireServer(id)
+			LabRemotes.fireServer(Net.Names.LabMoveTo, id)
 		end)
 		stationButtons[id] = element
 	end
 
 	workButton = button(frame, "Work", UDim2.fromOffset(12, 72), UDim2.fromOffset(132, 32), "HOLD E: WORK STRAP")
-	workButton.BackgroundColor3 = Color3.fromRGB(60, 110, 70)
+	workButton.BackgroundColor3 = UIKit.Theme.Positive
 
 	local function setWorking(state: boolean)
 		if working == state then
 			return
 		end
 		working = state
-		workRemote:FireServer(state)
+		LabRemotes.fireServer(Net.Names.LabWork, state)
 		workButton.BackgroundColor3 = if state
 			then Color3.fromRGB(95, 180, 110)
-			else Color3.fromRGB(60, 110, 70)
+			else UIKit.Theme.Positive
 	end
 
-	workButton.InputBegan:Connect(function(input: InputObject)
-		if input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch
-		then
-			setWorking(true)
-		end
-	end)
-	workButton.InputEnded:Connect(function(input: InputObject)
-		if input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch
-		then
-			setWorking(false)
-		end
-	end)
+	UIKit.bindHold(workButton, setWorking)
 
 	switchButton = button(frame, "Switch", UDim2.fromOffset(152, 72), UDim2.fromOffset(64, 32), "T: ROLE")
 	switchButton.Activated:Connect(function()
-		switchRemote:FireServer()
+		LabRemotes.fireServer(Net.Names.LabSwitchRole)
 	end)
 
 	restartButton = button(frame, "Restart", UDim2.fromOffset(224, 72), UDim2.fromOffset(64, 32), "R: RESET")
-	restartButton.BackgroundColor3 = Color3.fromRGB(96, 54, 54)
+	restartButton.BackgroundColor3 = UIKit.Theme.Danger
 	restartButton.Activated:Connect(function()
-		restartRemote:FireServer()
+		LabRemotes.fireServer(Net.Names.LabRestart)
 	end)
 
 	LabUI.setWorking = setWorking
@@ -253,18 +215,7 @@ local function buildTouchDrive(parent: Instance)
 	local frame = panel(parent, "Drive", UDim2.new(1, -206, 1, -172), UDim2.fromOffset(190, 156))
 	label(frame, "Title", UDim2.fromOffset(12, 6), UDim2.new(1, -24, 0, 18), "DRIVE", 14, Enum.Font.GothamBlack)
 
-	local function hold(element: TextButton, setter: (boolean) -> ())
-		element.InputBegan:Connect(function(input: InputObject)
-			if input.UserInputType == Enum.UserInputType.Touch then
-				setter(true)
-			end
-		end)
-		element.InputEnded:Connect(function(input: InputObject)
-			if input.UserInputType == Enum.UserInputType.Touch then
-				setter(false)
-			end
-		end)
-	end
+	local hold = UIKit.bindHold
 
 	hold(button(frame, "Fwd", UDim2.fromOffset(66, 28), UDim2.fromOffset(56, 38), "GO"), function(state)
 		touchForward = state
@@ -284,12 +235,7 @@ local function buildTouchDrive(parent: Instance)
 end
 
 local function build()
-	gui = Instance.new("ScreenGui")
-	gui.Name = "CargoLabHUD"
-	gui.ResetOnSpawn = false
-	gui.IgnoreGuiInset = true
-	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-	gui.Parent = player:WaitForChild("PlayerGui")
+	gui = UIKit.screen("CargoLabHUD", player:WaitForChild("PlayerGui"))
 
 	local status = panel(gui, "Status", UDim2.fromOffset(16, 16), UDim2.fromOffset(300, 128))
 	speedLabel = label(status, "Speed", UDim2.fromOffset(12, 8), UDim2.new(1, -24, 0, 30), "0", 28, Enum.Font.GothamBlack)
@@ -311,7 +257,7 @@ local function build()
 		14,
 		Enum.Font.GothamMedium
 	)
-	readoutLabel.TextColor3 = Color3.fromRGB(170, 178, 190)
+	readoutLabel.TextColor3 = UIKit.Theme.Muted
 	integrityLabel = label(
 		status,
 		"Integrity",
@@ -321,7 +267,7 @@ local function build()
 		14,
 		Enum.Font.GothamMedium
 	)
-	integrityLabel.TextColor3 = Color3.fromRGB(170, 178, 190)
+	integrityLabel.TextColor3 = UIKit.Theme.Muted
 	timeLabel = label(
 		status,
 		"Time",
@@ -331,7 +277,7 @@ local function build()
 		13,
 		Enum.Font.GothamMedium
 	)
-	timeLabel.TextColor3 = Color3.fromRGB(140, 148, 160)
+	timeLabel.TextColor3 = UIKit.Theme.Dim
 
 	local brief = panel(gui, "Brief", UDim2.new(0.5, -260, 0, 16), UDim2.fromOffset(520, 66))
 	objectiveLabel = label(
@@ -346,7 +292,7 @@ local function build()
 	objectiveLabel.TextXAlignment = Enum.TextXAlignment.Center
 	hintLabel = label(brief, "Hint", UDim2.fromOffset(14, 34), UDim2.new(1, -28, 0, 22), "", 14, Enum.Font.GothamMedium)
 	hintLabel.TextXAlignment = Enum.TextXAlignment.Center
-	hintLabel.TextColor3 = Color3.fromRGB(170, 178, 190)
+	hintLabel.TextColor3 = UIKit.Theme.Muted
 
 	toastLabel = label(
 		gui,
@@ -358,7 +304,7 @@ local function build()
 		Enum.Font.GothamBold
 	)
 	toastLabel.TextXAlignment = Enum.TextXAlignment.Center
-	toastLabel.TextColor3 = Color3.fromRGB(255, 210, 110)
+	toastLabel.TextColor3 = UIKit.Theme.Accent
 	toastLabel.TextStrokeTransparency = 0.5
 
 	resultFrame = panel(gui, "Result", UDim2.new(0.5, -220, 0.5, -70), UDim2.fromOffset(440, 128))
@@ -401,26 +347,49 @@ local RESULT_DETAIL = {
 	TimeExpired = "The clock beat you to the depot.",
 }
 
+local STATION_MINE = Color3.fromRGB(95, 130, 190)
+local STATION_TARGET = Color3.fromRGB(140, 120, 60)
+local STRAP_BROKEN = Color3.fromRGB(120, 44, 44)
+local STATUS_REFIT = Color3.fromRGB(255, 205, 90)
+local STATUS_GONE = Color3.fromRGB(220, 90, 90)
+local STATUS_WORKED = Color3.fromRGB(120, 220, 150)
+local TAG_IDLE = Color3.fromRGB(200, 205, 215)
+
+--[[
+	Every write here goes through a guarded setter.
+
+	The snapshot arrives at 10 Hz whether or not anything in it moved, and most
+	of what it carries is stable for seconds at a time: the objective text, the
+	hint, four strap colours, four station button colours. Writing all forty
+	properties unconditionally meant the great majority of writes were setting a
+	value to itself.
+]]
 local function refresh()
 	local snap = latest
 	if not snap then
 		return
 	end
 
-	speedLabel.Text = tostring(snap.speed)
-	conditionLabel.Text = CONDITION_TEXT[snap.condition] or snap.condition
-	conditionLabel.TextColor3 = CONDITION_COLOR[snap.condition] or Color3.fromRGB(235, 235, 235)
-	readoutLabel.Text = string.format(
-		"condition %d%%   offset %.1f studs   lean %d deg",
-		snap.cargoReadout,
-		snap.cargoOffset,
-		snap.cargoLeanDeg
+	UIKit.setText(speedLabel, tostring(snap.speed))
+	UIKit.setText(conditionLabel, CONDITION_TEXT[snap.condition] or snap.condition)
+	UIKit.setTextColor(conditionLabel, CONDITION_COLOR[snap.condition] or UIKit.Theme.Text)
+	UIKit.setText(
+		readoutLabel,
+		string.format(
+			"condition %d%%   offset %.1f studs   lean %d deg",
+			snap.cargoReadout,
+			snap.cargoOffset,
+			snap.cargoLeanDeg
+		)
 	)
-	integrityLabel.Text = string.format("truck %d%%", snap.chassisIntegrity)
-	timeLabel.Text = string.format("%ds left   route %d%%", snap.timeRemaining, math.floor(snap.routeProgress * 100))
+	UIKit.setText(integrityLabel, string.format("truck %d%%", snap.chassisIntegrity))
+	UIKit.setText(
+		timeLabel,
+		string.format("%ds left   route %d%%", snap.timeRemaining, math.floor(snap.routeProgress * 100))
+	)
 
-	objectiveLabel.Text = snap.objective
-	hintLabel.Text = snap.hint
+	UIKit.setText(objectiveLabel, snap.objective)
+	UIKit.setText(hintLabel, snap.hint)
 
 	for _, entry in snap.straps do
 		local row = strapRows[entry.id]
@@ -429,68 +398,72 @@ local function refresh()
 		end
 
 		local ratio = math.clamp(entry.health / LabConfig.StrapMaxHealth, 0, 1)
-		row.fill.Size = UDim2.fromScale(ratio, 1)
-		row.fill.BackgroundColor3 = if entry.broken
-			then Color3.fromRGB(120, 44, 44)
-			elseif ratio > 0.6 then Color3.fromRGB(90, 210, 120)
-			elseif ratio > 0.28 then Color3.fromRGB(240, 200, 70)
-			else Color3.fromRGB(240, 110, 60)
+		UIKit.setSize(row.fill, UDim2.fromScale(ratio, 1))
+		UIKit.setBackground(
+			row.fill,
+			if entry.broken
+				then STRAP_BROKEN
+				elseif ratio > 0.6 then UIKit.Theme.Good
+				elseif ratio > 0.28 then UIKit.Theme.Warn
+				else UIKit.Theme.Bad
+		)
 
-		row.tension.Size = UDim2.fromScale(math.clamp(entry.tension / 2.5, 0, 1), 0)
-			+ UDim2.fromOffset(0, 4)
+		UIKit.setSize(
+			row.tension,
+			UDim2.fromScale(math.clamp(entry.tension / 2.5, 0, 1), 0) + UDim2.fromOffset(0, 4)
+		)
 
 		if entry.broken then
-			row.status.Text = if entry.reattachable then "REFIT" else "GONE"
-			row.status.TextColor3 = if entry.reattachable
-				then Color3.fromRGB(255, 205, 90)
-				else Color3.fromRGB(220, 90, 90)
+			UIKit.setText(row.status, if entry.reattachable then "REFIT" else "GONE")
+			UIKit.setTextColor(row.status, if entry.reattachable then STATUS_REFIT else STATUS_GONE)
 		elseif entry.workedBy then
-			row.status.Text = "WORKED"
-			row.status.TextColor3 = Color3.fromRGB(120, 220, 150)
+			UIKit.setText(row.status, "WORKED")
+			UIKit.setTextColor(row.status, STATUS_WORKED)
 		else
-			row.status.Text = ""
+			UIKit.setText(row.status, "")
 		end
 
-		row.tag.TextColor3 = if snap.myStation == entry.id
-			then Color3.fromRGB(255, 210, 110)
-			else Color3.fromRGB(200, 205, 215)
-	end
-
-	for id, element in stationButtons do
-		local isMine = snap.myStation == id
-		local isTarget = snap.myMovingTo == id
-		element.BackgroundColor3 = if isMine
-			then Color3.fromRGB(95, 130, 190)
-			elseif isTarget then Color3.fromRGB(140, 120, 60)
-			else Color3.fromRGB(48, 54, 64)
+		UIKit.setTextColor(row.tag, if snap.myStation == entry.id then UIKit.Theme.Accent else TAG_IDLE)
 	end
 
 	local isStrapper = snap.myRole == "Strapper"
-	for _, element in stationButtons do
-		element.Visible = isStrapper
-	end
-	workButton.Visible = isStrapper
-	if snap.myThrown then
-		workButton.Text = "THROWN OFF"
-	elseif snap.myMovingTo then
-		workButton.Text = "MOVING TO " .. snap.myMovingTo
-	elseif snap.myStation then
-		workButton.Text = "HOLD E: WORK " .. snap.myStation
-	else
-		workButton.Text = "NO STATION"
+	for id, element in stationButtons do
+		UIKit.setBackground(
+			element,
+			if snap.myStation == id
+				then STATION_MINE
+				elseif snap.myMovingTo == id then STATION_TARGET
+				else UIKit.Theme.Button
+		)
+		UIKit.setVisible(element, isStrapper)
 	end
 
-	if snap.phase == "Result" and snap.outcome then
-		resultFrame.Visible = true
-		resultTitle.Text = string.upper(snap.outcome)
-		resultTitle.TextColor3 = if snap.outcome == "Delivered"
-			then Color3.fromRGB(110, 220, 140)
-			elseif snap.outcome == "PartialLoss" then Color3.fromRGB(245, 195, 80)
-			else Color3.fromRGB(235, 95, 85)
-		resultDetail.Text = (RESULT_DETAIL[snap.outcome] or "")
-			.. string.format("\n\nRestarting in %ds. Press R to go now.", snap.restartSeconds)
-	else
-		resultFrame.Visible = false
+	UIKit.setVisible(workButton, isStrapper)
+	UIKit.setText(
+		workButton,
+		if snap.myThrown
+			then "THROWN OFF"
+			elseif snap.myMovingTo then "MOVING TO " .. snap.myMovingTo
+			elseif snap.myStation then "HOLD E: WORK " .. snap.myStation
+			else "NO STATION"
+	)
+
+	local showResult = snap.phase == "Result" and snap.outcome ~= nil
+	UIKit.setVisible(resultFrame, showResult)
+	if showResult then
+		UIKit.setText(resultTitle, string.upper(snap.outcome))
+		UIKit.setTextColor(
+			resultTitle,
+			if snap.outcome == "Delivered"
+				then Color3.fromRGB(110, 220, 140)
+				elseif snap.outcome == "PartialLoss" then Color3.fromRGB(245, 195, 80)
+				else Color3.fromRGB(235, 95, 85)
+		)
+		UIKit.setText(
+			resultDetail,
+			(RESULT_DETAIL[snap.outcome] or "")
+				.. string.format("\n\nRestarting in %ds. Press R to go now.", snap.restartSeconds)
+		)
 	end
 end
 
@@ -515,17 +488,17 @@ local function bindInputs()
 		elseif code == Enum.KeyCode.E then
 			LabUI.setWorking(true)
 		elseif code == Enum.KeyCode.R then
-			restartRemote:FireServer()
+			LabRemotes.fireServer(Net.Names.LabRestart)
 		elseif code == Enum.KeyCode.T then
-			switchRemote:FireServer()
+			LabRemotes.fireServer(Net.Names.LabSwitchRole)
 		elseif code == Enum.KeyCode.One then
-			moveRemote:FireServer(LabConfig.StationOrder[1])
+			LabRemotes.fireServer(Net.Names.LabMoveTo, LabConfig.StationOrder[1])
 		elseif code == Enum.KeyCode.Two then
-			moveRemote:FireServer(LabConfig.StationOrder[2])
+			LabRemotes.fireServer(Net.Names.LabMoveTo, LabConfig.StationOrder[2])
 		elseif code == Enum.KeyCode.Three then
-			moveRemote:FireServer(LabConfig.StationOrder[3])
+			LabRemotes.fireServer(Net.Names.LabMoveTo, LabConfig.StationOrder[3])
 		elseif code == Enum.KeyCode.Four then
-			moveRemote:FireServer(LabConfig.StationOrder[4])
+			LabRemotes.fireServer(Net.Names.LabMoveTo, LabConfig.StationOrder[4])
 		end
 	end)
 
@@ -549,11 +522,25 @@ end
 
 -- ----------------------------------------------------------------- camera
 
+--[[
+	Three FindFirstChild calls per rendered frame, for a part that changes at
+	most once a session. Caching it and checking Parent is one field read;
+	losing the parent is also exactly what happens when the rebuild command
+	swaps the rig out, so the check doubles as the invalidation.
+]]
+local cachedChassis: BasePart? = nil
+
 local function findChassis(): BasePart?
+	local cached = cachedChassis
+	if cached and cached.Parent then
+		return cached
+	end
+
 	local root = Workspace:FindFirstChild("CargoLab")
 	local truck = root and root:FindFirstChild("LabTruck")
 	local chassis = truck and truck:FindFirstChild("Chassis")
-	return if chassis and chassis:IsA("BasePart") then chassis else nil
+	cachedChassis = if chassis and chassis:IsA("BasePart") then chassis else nil
+	return cachedChassis
 end
 
 local function bindCamera()
@@ -589,23 +576,17 @@ end
 -- ------------------------------------------------------------------ mount
 
 function LabUI.mount()
-	driveRemote = Net.get(Net.Names.LabDrive)
-	moveRemote = Net.get(Net.Names.LabMoveTo)
-	workRemote = Net.get(Net.Names.LabWork)
-	restartRemote = Net.get(Net.Names.LabRestart)
-	switchRemote = Net.get(Net.Names.LabSwitchRole)
-
 	build()
 	bindInputs()
 	bindCamera()
 
-	Net.get(Net.Names.LabSnapshot).OnClientEvent:Connect(function(snap: any)
+	LabRemotes.onClient(Net.Names.LabSnapshot, function(snap: LabTypes.LabSnapshot)
 		latest = snap
 		refresh()
 	end)
 
 	local toastToken = 0
-	Net.get(Net.Names.LabEvent).OnClientEvent:Connect(function(text: any)
+	LabRemotes.onClient(Net.Names.LabEvent, function(text: any)
 		if typeof(text) ~= "string" then
 			return
 		end
@@ -631,7 +612,7 @@ function LabUI.mount()
 			return
 		end
 
-		driveRemote:FireServer({
+		LabRemotes.fireServer(Net.Names.LabDrive, {
 			throttle = (if keyForward or touchForward then 1 else 0)
 				- (if keyReverse or touchReverse then 1 else 0),
 			steering = (if keyRight or touchRight then 1 else 0) - (if keyLeft or touchLeft then 1 else 0),
