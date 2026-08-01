@@ -1,11 +1,11 @@
-# Build Checklist — Cargo Catastrophe V0
+# Build Checklist · Cargo Catastrophe V0
 
-> **Superseded. Historical only — do not work from this list.**
+> **Superseded. Historical only · do not work from this list.**
 >
 > Every box here was ticked, and then [CoreFunAudit_V0.md](CoreFunAudit_V0.md)
 > found that a build satisfying all of them still was not fun: the truck was an
 > anchored model moved by `PivotTo` and the cargo was a scalar the visuals
-> obeyed rather than reported. That is the interesting part of this document —
+> obeyed rather than reported. That is the interesting part of this document ·
 > it is a complete checklist for a game that did not work, and the reason is
 > that every item asks whether a system exists rather than whether it produces
 > the fantasy.

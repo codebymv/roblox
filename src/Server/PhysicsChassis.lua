@@ -44,11 +44,49 @@ local function weldTo(primary: BasePart, part: BasePart)
 	weld.Parent = primary
 end
 
+--[[
+	Roblox cylinders spin around local X. Build a wheel frame with X = axle
+	(lateral), Y = ground normal, Z = roll direction, then apply tread spin.
+]]
+function PhysicsChassis:_wheelCFrame(center: Vector3, axle: Vector3, forward: Vector3, spin: number): CFrame
+	local xAxis = axle.Unit
+	local lookAxis = (forward - xAxis * forward:Dot(xAxis)).Unit
+	local yAxis = xAxis:Cross(lookAxis).Unit
+	-- CFrame.fromMatrix's third axis is BackVector, not LookVector. Passing the
+	-- forward vector here produced a reflected basis that could flip visually.
+	local cf = CFrame.fromMatrix(center, xAxis, yAxis, -lookAxis)
+	if spin ~= 0 then
+		cf *= CFrame.Angles(spin, 0, 0)
+	end
+	return cf
+end
+
+function PhysicsChassis:_mountWheelVisual(
+	chassisCF: CFrame,
+	offset: Vector3,
+	steer: boolean,
+	spin: number,
+	suspensionTravel: number?
+): CFrame
+	local steerRotation = if steer then CFrame.Angles(0, self.steerAngle, 0) else CFrame.identity
+	local mountCF = chassisCF * CFrame.new(offset) * steerRotation
+	-- Distance from the mount to the wheel centre. The old expression always
+	-- subtracted one full wheel radius and then subtracted airborne travel a
+	-- second time, placing parked wheels about a stud too low and making them
+	-- jump on the first live suspension ray.
+	local staticDistance = LabConfig.SuspensionRestLength * (1 - LabConfig.SuspensionStaticCompression)
+		- LabConfig.WheelRadius
+	local travel = suspensionTravel or staticDistance
+	local center = mountCF.Position - mountCF.UpVector * math.max(0, travel)
+	return self:_wheelCFrame(center, mountCF.RightVector, mountCF.LookVector, spin)
+end
+
 function PhysicsChassis.new(route: WorldBuilder.LabRouteInfo)
 	local self = setmetatable({
 		route = route,
 		steerAngle = 0,
 		wheels = {},
+		bodyPaintParts = {},
 		suspensionHealth = { FL = 1, FR = 1, RL = 1, RR = 1 },
 		steeringHealth = 1,
 		integrity = LabConfig.MaxChassisIntegrity,
@@ -74,6 +112,19 @@ function PhysicsChassis:_build()
 	model.Name = "LabTruck"
 	model.Parent = self.route.root
 
+	local function addDetail(name: string, size: Vector3, color: Color3, material: Enum.Material): Part
+		local part = Instance.new("Part")
+		part.Name = name
+		part.Size = size
+		part.Color = color
+		part.Material = material
+		part.Anchored = false
+		part.CanCollide = false
+		part.Massless = true
+		part.Parent = model
+		return part
+	end
+
 	local chassis = Instance.new("Part")
 	chassis.Name = "Chassis"
 	chassis.Size = LabConfig.ChassisSize
@@ -93,17 +144,20 @@ function PhysicsChassis:_build()
 	cab.Size = LabConfig.CabSize
 	cab.CFrame = chassis.CFrame * CFrame.new(LabConfig.CabOffset)
 	cab.Color = Color3.fromRGB(170, 66, 48)
-	cab.Material = Enum.Material.Metal
+	cab.Material = Enum.Material.SmoothPlastic
 	cab.Anchored = false
 	cab.CanCollide = false
 	cab.CustomPhysicalProperties = PhysicalProperties.new(LabConfig.CabDensity, 0.3, 0, 1, 1)
 	cab.Parent = model
 	weldTo(chassis, cab)
+	table.insert(self.bodyPaintParts, cab)
 
 	local windshield = Instance.new("Part")
 	windshield.Name = "Windshield"
-	windshield.Size = Vector3.new(7, 2.2, 0.3)
-	windshield.CFrame = cab.CFrame * CFrame.new(0, 0.7, -3.1)
+	windshield.Size = LabConfig.WindshieldSize
+	windshield.CFrame = cab.CFrame
+		* CFrame.new(LabConfig.WindshieldOffset)
+		* CFrame.Angles(-math.rad(LabConfig.WindshieldRakeDeg), 0, 0)
 	windshield.Color = Color3.fromRGB(95, 170, 205)
 	windshield.Material = Enum.Material.Glass
 	windshield.Transparency = 0.35
@@ -112,6 +166,160 @@ function PhysicsChassis:_build()
 	windshield.Massless = true
 	windshield.Parent = model
 	weldTo(chassis, windshield)
+
+	local bedDeck = Instance.new("Part")
+	bedDeck.Name = "BedDeck"
+	bedDeck.Size = LabConfig.BedDeckSize
+	bedDeck.CFrame = chassis.CFrame * CFrame.new(LabConfig.BedDeckOffset)
+	bedDeck.Color = Color3.fromRGB(42, 46, 52)
+	bedDeck.Material = Enum.Material.DiamondPlate
+	bedDeck.Anchored = false
+	bedDeck.CanCollide = false
+	bedDeck.Massless = true
+	bedDeck.Parent = model
+	weldTo(chassis, bedDeck)
+
+	local bumper = addDetail("Bumper", LabConfig.BumperSize, Color3.fromRGB(38, 42, 48), Enum.Material.Metal)
+	bumper.CFrame = chassis.CFrame * CFrame.new(LabConfig.BumperOffset)
+	weldTo(chassis, bumper)
+
+	-- A readable front face matters at every crew handoff: players thrown onto
+	-- the road should immediately know which way the truck is pointing.
+	local frontBumper =
+		addDetail("FrontBumper", Vector3.new(8.9, 0.55, 0.48), Color3.fromRGB(46, 50, 56), Enum.Material.Metal)
+	frontBumper.CFrame = cab.CFrame * CFrame.new(0, -2.18, -3.12)
+	weldTo(chassis, frontBumper)
+
+	local grille = addDetail("Grille", Vector3.new(4.8, 1.5, 0.18), Color3.fromRGB(30, 34, 39), Enum.Material.Metal)
+	grille.CFrame = cab.CFrame * CFrame.new(0, -1.05, -3.16)
+	weldTo(chassis, grille)
+	for barIndex = -2, 2 do
+		local grilleBar =
+			addDetail("GrilleBar", Vector3.new(0.12, 1.32, 0.12), Color3.fromRGB(132, 138, 145), Enum.Material.Metal)
+		grilleBar.CFrame = cab.CFrame * CFrame.new(barIndex * 0.78, -1.05, -3.28)
+		weldTo(chassis, grilleBar)
+	end
+
+	local roofVisor =
+		addDetail("RoofVisor", Vector3.new(8.3, 0.18, 1.05), Color3.fromRGB(42, 46, 52), Enum.Material.Metal)
+	roofVisor.CFrame = cab.CFrame * CFrame.new(0, 2.56, -2.45) * CFrame.Angles(math.rad(-10), 0, 0)
+	weldTo(chassis, roofVisor)
+
+	for lampIndex = -1, 1 do
+		local marker =
+			addDetail("RoofMarker", Vector3.new(0.34, 0.22, 0.28), Color3.fromRGB(255, 174, 48), Enum.Material.Neon)
+		marker.CFrame = cab.CFrame * CFrame.new(lampIndex * 1.5, 2.62, -1.55)
+		weldTo(chassis, marker)
+	end
+
+	for _, side in { -1, 1 } do
+		local headlight = Instance.new("Part")
+		headlight.Name = if side == -1 then "HeadlightL" else "HeadlightR"
+		headlight.Size = Vector3.new(0.55, 0.75, 0.35)
+		headlight.CFrame = cab.CFrame
+			* CFrame.new(LabConfig.HeadlightOffset.X * side, LabConfig.HeadlightOffset.Y, LabConfig.HeadlightOffset.Z)
+		headlight.Color = Color3.fromRGB(255, 244, 200)
+		headlight.Material = Enum.Material.Neon
+		headlight.Anchored = false
+		headlight.CanCollide = false
+		headlight.Massless = true
+		headlight.Parent = model
+		weldTo(chassis, headlight)
+
+		local taillight = Instance.new("Part")
+		taillight.Name = if side == -1 then "TaillightL" else "TaillightR"
+		taillight.Size = Vector3.new(0.5, 0.65, 0.25)
+		taillight.CFrame = chassis.CFrame
+			* CFrame.new(LabConfig.TaillightOffset.X * side, LabConfig.TaillightOffset.Y, LabConfig.TaillightOffset.Z)
+		taillight.Color = Color3.fromRGB(220, 45, 40)
+		taillight.Material = Enum.Material.Neon
+		taillight.Anchored = false
+		taillight.CanCollide = false
+		taillight.Massless = true
+		taillight.Parent = model
+		weldTo(chassis, taillight)
+
+		local mirrorArm = addDetail(
+			if side == -1 then "MirrorArmL" else "MirrorArmR",
+			Vector3.new(0.18, 0.18, 0.85),
+			Color3.fromRGB(48, 52, 58),
+			Enum.Material.Metal
+		)
+		mirrorArm.CFrame = cab.CFrame
+			* CFrame.new(LabConfig.MirrorArmOffset.X * side, LabConfig.MirrorArmOffset.Y, LabConfig.MirrorArmOffset.Z)
+		weldTo(chassis, mirrorArm)
+
+		local mirrorGlass = addDetail(
+			if side == -1 then "MirrorL" else "MirrorR",
+			Vector3.new(0.08, 0.55, 0.75),
+			Color3.fromRGB(130, 145, 158),
+			Enum.Material.Glass
+		)
+		mirrorGlass.CFrame = cab.CFrame
+			* CFrame.new(
+				LabConfig.MirrorArmOffset.X * side,
+				LabConfig.MirrorArmOffset.Y + 0.05,
+				LabConfig.MirrorArmOffset.Z
+			)
+			* CFrame.new(side * 0.45, 0, 0.35)
+		mirrorGlass.Transparency = 0.25
+		weldTo(chassis, mirrorGlass)
+
+		local door = addDetail(
+			if side == -1 then "DoorL" else "DoorR",
+			Vector3.new(0.14, 2.75, 2.9),
+			Color3.fromRGB(170, 66, 48),
+			Enum.Material.SmoothPlastic
+		)
+		door.CFrame = cab.CFrame * CFrame.new(side * 4.23, -0.15, 0.2)
+		weldTo(chassis, door)
+		table.insert(self.bodyPaintParts, door)
+
+		local handle = addDetail(
+			if side == -1 then "DoorHandleL" else "DoorHandleR",
+			Vector3.new(0.12, 0.14, 0.7),
+			Color3.fromRGB(38, 42, 48),
+			Enum.Material.Metal
+		)
+		handle.CFrame = cab.CFrame * CFrame.new(side * 4.32, 0.45, -0.3)
+		weldTo(chassis, handle)
+
+		local stack = addDetail(
+			if side == -1 then "ExhaustStackL" else "ExhaustStackR",
+			Vector3.new(3.7, 0.34, 0.34),
+			Color3.fromRGB(88, 92, 98),
+			Enum.Material.Metal
+		)
+		stack.Shape = Enum.PartType.Cylinder
+		stack.CFrame = chassis.CFrame * CFrame.new(side * 3.35, 4.65, -1.35) * CFrame.Angles(0, 0, math.rad(90))
+		weldTo(chassis, stack)
+	end
+
+	local rearBumper =
+		addDetail("RearBumper", Vector3.new(8.8, 0.62, 0.5), Color3.fromRGB(42, 46, 52), Enum.Material.Metal)
+	rearBumper.CFrame = chassis.CFrame * CFrame.new(0, 0.15, 8.1)
+	weldTo(chassis, rearBumper)
+
+	for _, x in { -2.4, 2.4 } do
+		local mudFlap =
+			addDetail("RearMudFlap", Vector3.new(1.75, 1.55, 0.16), Color3.fromRGB(24, 25, 28), Enum.Material.Rubber)
+		mudFlap.CFrame = chassis.CFrame * CFrame.new(x, -0.75, 7.65)
+		weldTo(chassis, mudFlap)
+	end
+
+	for _, id in WHEEL_ORDER do
+		local offset = LabConfig.WheelOffsets[id]
+		local side = if offset.X < 0 then -1 else 1
+		local fender = addDetail(
+			"Fender" .. id,
+			Vector3.new(0.32, 1.65, 2.35),
+			Color3.fromRGB(170, 66, 48),
+			Enum.Material.SmoothPlastic
+		)
+		fender.CFrame = chassis.CFrame * CFrame.new(offset + Vector3.new(side * 0.22, 1.05, 0))
+		weldTo(chassis, fender)
+		table.insert(self.bodyPaintParts, fender)
+	end
 
 	-- Side rails double as the strap anchor line and the running boards the
 	-- crew stands on.
@@ -149,13 +357,18 @@ function PhysicsChassis:_build()
 		attachment.Position = LabConfig.StrapRailLocal[id]
 		attachment.Parent = chassis
 		anchors[id] = attachment
+
+		local ratchet =
+			addDetail("Ratchet_" .. id, LabConfig.StrapRatchetSize, Color3.fromRGB(200, 175, 60), Enum.Material.Metal)
+		ratchet.CFrame = chassis.CFrame * CFrame.new(LabConfig.StrapRailLocal[id]) * CFrame.Angles(0, math.rad(90), 0)
+		weldTo(chassis, ratchet)
 	end
 
 	--[[
-		Wheels are anchored visual props repositioned from the raycast result
-		each frame. Making them real physics wheels would mean constraint tuning
-		we explicitly decided not to pay for, and the suspension travel reads
-		just as well this way.
+		Wheels are anchored authoritative suspension targets repositioned from the
+		raycast result each frame. Clients render locally smoothed copies so these
+		server updates never fight chassis interpolation. Making them real physics
+		wheels would add constraint tuning without improving the handling model.
 	]]
 	for _, id in WHEEL_ORDER do
 		local offset = LabConfig.WheelOffsets[id]
@@ -168,13 +381,28 @@ function PhysicsChassis:_build()
 		wheel.Anchored = true
 		wheel.CanCollide = false
 		wheel.CanQuery = false
-		wheel.CFrame = chassis.CFrame * CFrame.new(offset)
+		wheel.CFrame = self:_mountWheelVisual(chassis.CFrame, offset, id == "FL" or id == "FR", 0)
 		wheel.Parent = model
+
+		local hub = Instance.new("Part")
+		hub.Name = "Hub"
+		hub.Shape = Enum.PartType.Cylinder
+		hub.Size = Vector3.new(LabConfig.WheelWidth + 0.08, LabConfig.HubRadius * 2, LabConfig.HubRadius * 2)
+		hub.Color = Color3.fromRGB(175, 180, 186)
+		hub.Material = Enum.Material.Metal
+		hub.Anchored = false
+		hub.CanCollide = false
+		hub.CanQuery = false
+		hub.Massless = true
+		hub.CFrame = wheel.CFrame
+		hub.Parent = wheel
+		weldTo(wheel, hub)
 
 		self.wheels[id] = {
 			id = id,
 			offset = offset,
 			part = wheel,
+			hub = hub,
 			steer = id == "FL" or id == "FR",
 			drive = id == "RL" or id == "RR",
 			grounded = false,
@@ -268,7 +496,8 @@ function PhysicsChassis:damageSuspension(wheelId: string, amount: number)
 end
 
 function PhysicsChassis:degradeSteering(amount: number)
-	self.steeringHealth = math.clamp(self.steeringHealth - amount, 0.3, 1)
+	-- Floor raised so "vague steering" means sluggish, not hair-trigger snap.
+	self.steeringHealth = math.clamp(self.steeringHealth - amount, 0.45, 1)
 end
 
 function PhysicsChassis:repairSuspension(wheelId: string, amount: number)
@@ -290,7 +519,7 @@ end
 
 function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 	local chassis = self.chassis
-	if not chassis or not chassis.Parent then
+	if not chassis or not chassis.Parent or chassis.Anchored then
 		return
 	end
 
@@ -315,23 +544,56 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 	self.longitudinalAccel = self.accelWorld:Dot(cf.LookVector)
 
 	-- A hard hit shows up as a velocity change no drivetrain could produce.
+	-- Braking on grass/shoulder legitimately spikes decel; widen the budget so
+	-- a road-edge bump does not one-shot the chassis integrity meter.
 	local budget = (LabConfig.EngineAccel + LabConfig.BrakeAccel + GRAVITY) * 1.5
+	if input.braking then
+		budget += LabConfig.BrakeAccel * 2
+	end
+	budget += LabConfig.Surfaces.Shoulder.resistance * 3
+
 	local unexplained = rawAccel.Magnitude - budget
-	if unexplained > 55 and os.clock() - self.lastImpact > 0.35 then
-		self:applyImpactDamage(unexplained * dt * LabConfig.ImpactDamageScale, "impact")
+	if unexplained > LabConfig.ImpactThreshold and os.clock() - self.lastImpact > 0.35 then
+		local damage = math.min(unexplained * dt * LabConfig.ImpactDamageScale, LabConfig.ImpactDamageCap)
+		self:applyImpactDamage(damage, "impact")
 	end
 
 	local forwardSpeed = velocity:Dot(cf.LookVector)
 	local speedFactor =
 		math.clamp(1 - math.abs(forwardSpeed) / LabConfig.SteerSpeedFalloff, LabConfig.MinSteerFactor, 1)
 	local maxSteer = math.rad(LabConfig.MaxSteerAngleDeg) * speedFactor * self.steeringHealth
-	local targetSteer = math.clamp(input.steering, -1, 1) * maxSteer
-	local steerStep = math.rad(LabConfig.SteerRateDegPerSec) * dt
+
+	-- Pitch from the look vector: positive when the nose points downhill.
+	-- A small deadzone ignores flat-road noise so the soft cap never fights
+	-- the throttle on the warm-up straight.
+	local downhillGrade = math.max(0, -cf.LookVector.Y)
+	if downhillGrade < 0.04 then
+		downhillGrade = 0
+	end
+
+	--[[
+		Negated, and it has to be.
+
+		The client sends steering as right minus left, so pressing D is +1. A
+		rotation about Y is counter-clockwise seen from above, so a positive
+		angle points the front wheels left: CFrame.Angles(0, math.rad(90), 0)
+		leaves LookVector at (-1, 0, 0), which is -X, and +X is the truck's
+		right. Feeding the input straight in steered the truck the wrong way.
+	]]
+	local targetSteer = -math.clamp(input.steering, -1, 1) * maxSteer
+	-- Degraded steering slows how fast the wheels turn, not just how far they
+	-- can turn. Without this, a worn truck still snaps to max angle in one
+	-- frame and spins from a tap of A/D.
+	local steerRateScale = 0.4 + 0.6 * self.steeringHealth
+	local steerStep = math.rad(LabConfig.SteerRateDegPerSec) * dt * steerRateScale
 	self.steerAngle += math.clamp(targetSteer - self.steerAngle, -steerStep, steerStep)
 	self.turnSeverity = math.abs(self.steerAngle) / math.max(math.rad(LabConfig.MaxSteerAngleDeg), 0.001)
 
 	local stiffness, damping = self:_springRate(extraMass)
-	local maxSpringForce = mass * GRAVITY * LabConfig.SuspensionMaxForceScale
+	-- This is a per-wheel force. Capping against the whole truck mass made the
+	-- limiter four times looser than its name and comment promised, so a sharp
+	-- slab edge could turn damping force into a launch impulse.
+	local maxSpringForce = (mass / 4) * GRAVITY * LabConfig.SuspensionMaxForceScale
 	local groundedCount = 0
 
 	for _, id in WHEEL_ORDER do
@@ -406,6 +668,19 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 				end
 			end
 
+			--[[
+				Downhill soft cap. Space still wins above; this runs under
+				throttle and coast so gravity cannot freely push past the
+				steering sweet spot. Strength scales with how far over the
+				cap you are and how steep the grade is.
+			]]
+			if not input.braking and wheel.drive and downhillGrade > 0 and forwardSpeed > LabConfig.DownhillSoftCap then
+				local over = (forwardSpeed - LabConfig.DownhillSoftCap) / math.max(LabConfig.DownhillSoftCap, 1)
+				local strength = LabConfig.DownhillBrakeAccel * math.clamp(over, 0, 1.5) * (0.5 + downhillGrade)
+				longitudinal -= strength * (mass / 2)
+				longitudinal = math.clamp(longitudinal, -gripBudget, gripBudget)
+			end
+
 			-- Rolling resistance from the surface the wheel is actually on.
 			local along = pointVelocity:Dot(wheelForward)
 			if surface.resistance > 0 and math.abs(along) > LabConfig.SpeedDeadzone then
@@ -415,18 +690,22 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 			chassis:ApplyImpulseAtPosition(wheelForward * longitudinal * dt, mountWorld)
 			self.brakeForce = if input.braking then math.abs(longitudinal) / math.max(mass, 1) else 0
 
-			wheel.part.CFrame = CFrame.lookAt(
-				result.Position + normal * LabConfig.WheelRadius,
-				result.Position + normal * LabConfig.WheelRadius + wheelForward
-			) * CFrame.Angles(0, math.rad(90), 0) * CFrame.Angles(0, 0, math.rad(90))
+			wheel.spin += (along / LabConfig.WheelRadius) * dt
+
+			local center = result.Position + normal * LabConfig.WheelRadius
+			wheel.part.CFrame = self:_wheelCFrame(center, wheelRight, wheelForward, wheel.spin)
 		else
 			wheel.grounded = false
 			wheel.compression = 0
 			wheel.normalForce = 0
 			wheel.surface = "Air"
-			wheel.part.CFrame = cf
-				* CFrame.new(wheel.offset - Vector3.new(0, LabConfig.SuspensionRestLength * 0.7, 0))
-				* CFrame.Angles(0, 0, math.rad(90))
+			wheel.part.CFrame = self:_mountWheelVisual(
+				cf,
+				wheel.offset,
+				wheel.steer,
+				wheel.spin,
+				LabConfig.SuspensionRestLength - LabConfig.WheelRadius
+			)
 		end
 	end
 
@@ -500,6 +779,24 @@ function PhysicsChassis:getWheels()
 	return self.wheels
 end
 
+function PhysicsChassis:setFrozen(frozen: boolean)
+	local chassis = self.chassis
+	if not chassis or not chassis.Parent then
+		return
+	end
+	chassis.AssemblyLinearVelocity = Vector3.zero
+	chassis.AssemblyAngularVelocity = Vector3.zero
+	chassis.Anchored = frozen
+end
+
+function PhysicsChassis:setPaintColor(color: Color3)
+	for _, part in self.bodyPaintParts do
+		if part and part.Parent then
+			part.Color = color
+		end
+	end
+end
+
 --[[
 	Put the truck somewhere, upright and stationary, without touching damage or
 	wear. Zeroing velocity on both sides of the pivot is deliberate: the solver
@@ -525,6 +822,7 @@ function PhysicsChassis:teleport(cframe: CFrame)
 end
 
 function PhysicsChassis:reset()
+	self:setFrozen(false)
 	self:teleport(self.route.startCFrame)
 
 	self.steerAngle = 0
@@ -541,6 +839,10 @@ function PhysicsChassis:reset()
 	self.lastCause = ""
 	for _, id in WHEEL_ORDER do
 		self.suspensionHealth[id] = 1
+		local wheel = self.wheels[id]
+		if wheel then
+			wheel.spin = 0
+		end
 	end
 end
 
@@ -549,6 +851,7 @@ function PhysicsChassis:destroy()
 		self.model:Destroy()
 		self.model = nil
 	end
+	table.clear(self.bodyPaintParts)
 end
 
 PhysicsChassis.WheelOrder = WHEEL_ORDER

@@ -1,4 +1,4 @@
-# Prototype Brief — Cargo Catastrophe V0
+# Prototype Brief · Cargo Catastrophe V0
 
 > **Partly superseded.** The pitch, the player, the fantasy, the clip moments
 > and the kill / go criteria all still hold, and are the reason the project
@@ -32,13 +32,13 @@
 
 ## Core verb
 
-**Stabilize** — strap, steer, spot, and repair under pressure so the cargo does not dump.
+**Stabilize** · strap, steer, spot, and repair under pressure so the cargo does not dump.
 
 ## Thirty-second player loop
 
 1. See a threat (loose strap, sharp turn, engine smoke, cargo tilt).
 2. Role does their job (or fails / does the wrong thing).
-3. Cargo stabilizes — or a cascade starts that everyone can read in two seconds.
+3. Cargo stabilizes · or a cascade starts that everyone can read in two seconds.
 
 ## Full session structure
 
@@ -67,7 +67,7 @@ Solo stub: Driver only; failures auto-announce and offer simplified recover prom
 
 ## Primary clip moment
 
-Cargo dump / near-save / cascade fail — “he didn’t strap it” / “we had one second left” / “the whole load went over.”
+Cargo dump / near-save / cascade fail · “he didn’t strap it” / “we had one second left” / “the whole load went over.”
 
 Secondary clips: wrong repair, last-second latch, Spotter ping ignored then wipe.
 
@@ -78,7 +78,7 @@ Secondary clips: wrong repair, last-second latch, Spotter ping ignored then wipe
 ## What the player gains / loses
 
 - **Gain:** successful delivery, bragging rights for the run, funny fail clips
-- **Lose:** the cargo (run fail) — temporary; no persistent inventory loss in v0
+- **Lose:** the cargo (run fail) · temporary; no persistent inventory loss in v0
 
 ## Monetization hypothesis (not built in v0)
 

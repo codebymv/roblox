@@ -33,7 +33,7 @@
     "Players": {
       "$className": "Players",
       "$properties": {
-        "MaxPlayers": 16,
+        "MaxPlayers": 4,
         "RespawnTime": 3
       }
     },

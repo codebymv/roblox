@@ -38,8 +38,20 @@ local RESET_ATTRIBUTE = "ACTION_Reset"
 local TuningService = {}
 
 local folder: Folder? = nil
-local defaults: { [string]: any } = {}
 local buildDirty = false
+
+--[[
+	The file values, captured before anything can edit them.
+
+	This happens at require time rather than inside init because changedValues
+	is read by the run artifact whether or not live tuning is switched on. With
+	the defaults empty, every value would compare as changed, and a playtest run
+	with tuning disabled would record the entire config as modified.
+]]
+local defaults: { [string]: any } = {}
+for _, entry in TuningSchema.Entries do
+	defaults[entry.path] = TuningSchema.get(LabConfig, entry.path)
+end
 
 -- Guards the write-back path. Clamping an out-of-range edit re-sets the
 -- attribute, which would otherwise re-enter this handler forever.
@@ -215,12 +227,11 @@ function TuningService.init()
 
 	applying = true
 	for _, entry in TuningSchema.Entries do
-		local value = TuningSchema.get(LabConfig, entry.path)
+		local value = defaults[entry.path]
 		if value == nil then
 			warn("[Tuning] schema path missing from LabConfig: " .. entry.path)
 			continue
 		end
-		defaults[entry.path] = value
 		created:SetAttribute(entry.attribute, value)
 	end
 	created:SetAttribute(DUMP_ATTRIBUTE, false)

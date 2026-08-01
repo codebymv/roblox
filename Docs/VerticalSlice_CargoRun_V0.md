@@ -1,11 +1,11 @@
-# Vertical Slice — Cargo Run V0
+# Vertical Slice · Cargo Run V0
 
 > **Superseded. Historical only.**
 >
 > This describes the depot build's run, which `DevConfig.Mode` no longer selects
 > by default. Its failure deck is prompt-driven: an event fires, a role holds a
 > button, a stability scalar moves. The fun-test build replaced that entire
-> model with physics — straps that wear and snap, a crate that slides because
+> model with physics · straps that wear and snap, a crate that slides because
 > it was thrown, and a `PressureDirector` that perturbs the simulation rather
 > than posting a prompt. See [CoreFunAudit_V0.md](CoreFunAudit_V0.md) for why,
 > and the README for what the fun-test route and roles are now.
@@ -53,14 +53,14 @@ Lobby → Starting (3s) → Run (~120s prototype / 8–12 min ship) → Resolve 
 
 Defined in `src/Shared/Failures.lua`:
 
-1. Loose Strap — Strapper
-2. Sharp Turn — Driver
-3. Engine Fault — Repair
-4. Wheel Wobble — Repair
-5. Cargo Tilt — Strapper
-6. Ramp Drop — Repair
-7. Blind Corner — Spotter
-8. Overheat — Repair
+1. Loose Strap · Strapper
+2. Sharp Turn · Driver
+3. Engine Fault · Repair
+4. Wheel Wobble · Repair
+5. Cargo Tilt · Strapper
+6. Ramp Drop · Repair
+7. Blind Corner · Spotter
+8. Overheat · Repair
 
 Each failure:
 
@@ -99,7 +99,7 @@ If a run can finish with zero dramatic event, the failure interval tuning is wro
 
 ## Acceptance
 
-Matches [BuildChecklist_V0.md](BuildChecklist_V0.md): party can start, get a failure, save or dump, see resolve, rematch — without using the command bar.
+Matches [BuildChecklist_V0.md](BuildChecklist_V0.md): party can start, get a failure, save or dump, see resolve, rematch · without using the command bar.
 
 ## Code map
 

@@ -1,7 +1,7 @@
 # Top-10 Structural DNA vs. Cargo Catastrophe (V0)
 
-> **Partly superseded.** Sections 1, 2 and 4 — the competitor skeletons, the
-> twelve retention traits, and the patterns we are declining — are the durable
+> **Partly superseded.** Sections 1, 2 and 4 · the competitor skeletons, the
+> twelve retention traits, and the patterns we are declining · are the durable
 > half and still stand.
 >
 > Section 3 describes the depot build (legs, bank-or-push, manifest rarity, four

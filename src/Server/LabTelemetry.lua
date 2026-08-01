@@ -49,6 +49,7 @@ function LabTelemetry:reset()
 	self.strapRefits = 0
 	self.stationMoves = 0
 	self.throws = 0
+	self.crewSwaps = 0
 	self.pressureEvents = 0
 	self.firstInputAt = nil
 	self.firstMovementAt = nil
@@ -145,6 +146,11 @@ end
 function LabTelemetry:noteThrow(name: string)
 	self.throws += 1
 	self:log("thrown", name)
+end
+
+function LabTelemetry:noteCrewSwap(gateIndex: number, driverName: string)
+	self.crewSwaps += 1
+	self:log("crew_swap", string.format("gate_%d:%s", gateIndex, driverName))
 end
 
 local SEVERITY = {
@@ -253,6 +259,7 @@ function LabTelemetry:_writeArtifact(outcome: string, crateSaved: boolean, durat
 			strapRefits = self.strapRefits,
 			stationMoves = self.stationMoves,
 			throws = self.throws,
+			crewSwaps = self.crewSwaps,
 			pressureEvents = self.pressureEvents,
 			designedCascade = self.designedCascade,
 			emergentCascade = self.emergentCascade,
@@ -322,6 +329,7 @@ function LabTelemetry:finish(outcome: string, crateSaved: boolean)
 		string.format("cargo transitions  %d (%d recoveries)", self.conditionChanges, self.recoveries),
 		string.format("straps             %d broken, %d refitted", self.strapBreaks, self.strapRefits),
 		string.format("station moves      %d (%d throws)", self.stationMoves, self.throws),
+		string.format("crew swaps         %d", self.crewSwaps),
 		string.format("pressure events    %d", self.pressureEvents),
 		string.format("designed cascade   %s", tostring(self.designedCascade)),
 		string.format("emergent cascade   %s", tostring(self.emergentCascade)),

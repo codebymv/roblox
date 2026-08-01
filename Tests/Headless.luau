@@ -62,6 +62,13 @@ end
 
 local LabConfig = loadShared("LabConfig")
 local MatchConfig = loadShared("MatchConfig")
+local BuildProfiles = loadShared("BuildProfiles")
+local AudioIds = loadShared("AudioIds")
+local PresentationMath = loadShared("PresentationMath")
+local CrewRotation = loadShared("CrewRotation")
+local LabProgression = loadShared("LabProgression")
+local LabRespawnPolicy = loadShared("LabRespawnPolicy")
+local RunVariants = loadShared("RunVariants")
 local RouteMath = loadShared("RouteMath")
 local TokenBucket = loadShared("TokenBucket")
 local TuningSchema = loadShared("TuningSchema")
@@ -83,6 +90,103 @@ end
 print("headless suite")
 
 -- ---------------------------------------------------------- config invariants
+
+check("release profile disables every developer-only surface", function()
+	local release = BuildProfiles.get("Release")
+	assert(#BuildProfiles.releaseSafetyIssues(release) == 0, "Release profile is not safe")
+	assert(release.Telemetry, "Release playtests still need server telemetry")
+end)
+
+check("development profile keeps the Studio tuning workflow", function()
+	local development = BuildProfiles.get("Development")
+	assert(development.ShowDebugOverlay and development.LiveTuning, "Studio tooling should be available")
+	assert(#BuildProfiles.releaseSafetyIssues(development) > 0, "Development must not masquerade as release")
+end)
+
+check("one server is exactly one four-player crew", function()
+	assert(LabConfig.MaxCrew == 4, "Fun-test crew capacity must remain four")
+	assert(LabConfig.MaxCrew <= 1 + #LabConfig.StationOrder, "Crew capacity exceeds physical truck stations")
+end)
+
+check("the core SFX manifest has 36 unique Roblox assets", function()
+	local count = 0
+	local ids = {}
+	for name, id in AudioIds.Sfx do
+		count += 1
+		assert(typeof(name) == "string" and name ~= "", "SFX entry needs a name")
+		assert(typeof(id) == "string" and string.match(id, "^rbxassetid://%d+$"), name .. " has an invalid asset ID")
+		assert(not ids[id], "Duplicate SFX asset ID: " .. id)
+		ids[id] = true
+	end
+	assert(count == 36, string.format("Expected 36 core SFX, got %d", count))
+end)
+
+check("first-session feedback has enough time to answer", function()
+	assert(
+		LabConfig.FeedbackResultDisplaySeconds > LabConfig.ResultDisplaySeconds,
+		"Feedback result beat must outlast an ordinary restart"
+	)
+end)
+
+check("successful cargo runs pay more than recoverable failures", function()
+	local clean = LabProgression.rewardFor("Delivered", 100, 100)
+	local partial = LabProgression.rewardFor("PartialLoss", 70, 70)
+	local lost = LabProgression.rewardFor("CargoLost", 0, 80)
+	assert(clean > partial, "Clean delivery should beat partial delivery")
+	assert(partial > lost, "Partial delivery should beat cargo loss")
+	assert(lost > 0, "A failed run should still grant a participation reward")
+end)
+
+check("cargo rewards clamp untrusted measurements", function()
+	assert(
+		LabProgression.rewardFor("Delivered", 1000, 1000) == LabProgression.rewardFor("Delivered", 100, 100),
+		"Oversized measurements changed the payout"
+	)
+	assert(LabProgression.rewardFor("Unknown", 100, 100) == 0, "Unknown outcomes must not pay")
+end)
+
+check("the first run is a stable onboarding contract", function()
+	local variant = RunVariants.select(1, 0.99, 0.99, 0)
+	assert(variant.cargo.id == "GeneralFreight", "First run changed cargo")
+	assert(variant.contract.id == "Standard", "First run changed contract")
+	assert(variant.difficulty.id == "Normal", "First run changed difficulty")
+	assert(variant.openingWeakStrap == "FR", "First run changed its taught weak strap")
+end)
+
+check("later runs combine cargo, contract, difficulty, and weak strap", function()
+	local variant = RunVariants.select(2, 0.4, 0.8, 0.1)
+	assert(variant.cargo.id == "TowerLoad", "Cargo roll did not select the tall load")
+	assert(variant.contract.id == "Express", "Contract roll did not select express")
+	assert(variant.difficulty.id == "Catastrophe", "Difficulty roll did not select Catastrophe")
+	assert(variant.openingWeakStrap == "RL", "Weak strap did not rotate")
+end)
+
+check("fragile contracts require both arrival and cargo quality", function()
+	local fragile = RunVariants.select(2, 0, 0.4, 0.9)
+	assert(fragile.contract.id == "Fragile", "Fixture did not select fragile")
+	assert(RunVariants.contractMet(fragile, "Delivered", 75), "Threshold delivery failed")
+	assert(not RunVariants.contractMet(fragile, "Delivered", 74.9), "Damaged cargo passed fragile")
+	assert(not RunVariants.contractMet(fragile, "CargoLost", 100), "Lost cargo passed fragile")
+end)
+
+check("contract and difficulty multipliers stack only when earned", function()
+	local variant = RunVariants.select(2, 0, 0.4, 0.1)
+	local missed = RunVariants.rewardMultiplier(variant, false)
+	local completed = RunVariants.rewardMultiplier(variant, true)
+	assert(missed == variant.difficulty.rewardMultiplier, "Missed contract still received its bonus")
+	assert(completed > missed, "Completed contract did not increase its multiplier")
+	assert(
+		LabProgression.rewardFor("Delivered", 100, 100, completed) > LabProgression.rewardFor("Delivered", 100, 100),
+		"Reward policy ignored the earned multiplier"
+	)
+end)
+
+check("respawns never attach to a wreck or result-phase truck", function()
+	assert(not LabRespawnPolicy.shouldAttach("Result", false, 0, -200), "Result truck accepted a respawn")
+	assert(not LabRespawnPolicy.shouldAttach("Run", true, 0, -200), "Wrecked truck accepted a respawn")
+	assert(not LabRespawnPolicy.shouldAttach("Run", false, -180, -200), "Descending void truck accepted a respawn")
+	assert(LabRespawnPolicy.shouldAttach("Staging", false, 0, -200), "Safe staging truck rejected a respawn")
+end)
 
 check("cargo offset thresholds are strictly increasing", function()
 	assert(LabConfig.ShiftedOffset < LabConfig.SlidingOffset, "Shifted must be under Sliding")
@@ -123,6 +227,17 @@ check("the opening weak strap is a real strap", function()
 		"OpeningWeakStrap is not in StrapOrder: " .. tostring(LabConfig.OpeningWeakStrap)
 	)
 	assert(LabConfig.OpeningWeakHealth < LabConfig.StrapMaxHealth, "The opener must actually weaken the strap")
+end)
+
+check("SWAP gates are ordered and inside the route", function()
+	local previous = 0
+	for _, progress in LabConfig.SwapGateProgress do
+		assert(progress > previous and progress < 1, "SWAP gates must be strictly ordered inside the route")
+		previous = progress
+	end
+	assert(#LabConfig.SwapGateProgress >= 1, "At least one SWAP gate is required")
+	assert(LabConfig.SwapWarningProgress > 0, "SWAP warning distance must be positive")
+	assert(LabConfig.SwapHandoffSeconds > 0, "SWAP handoff must have a safety beat")
 end)
 
 -- ------------------------------------------------------------- route maths
@@ -198,6 +313,73 @@ check("cframeAt clamps out-of-range progress", function()
 	local over = RouteMath.cframeAt(straightThenRight, 42, 0)
 	assert((under.Position - Vector3.new(0, 0, 0)).Magnitude < 0.01, "Negative progress should clamp to the start")
 	assert((over.Position - Vector3.new(100, 0, 100)).Magnitude < 0.01, "Progress over one should clamp to the end")
+end)
+
+-- ------------------------------------------------------ presentation maths
+
+check("presentation smoothing never overshoots", function()
+	local value = PresentationMath.approach(0, 100, 12, 1 / 30)
+	assert(value > 0 and value < 100, "Smoothing must move toward, not past, the target")
+end)
+
+check("presentation smoothing is frame-rate independent", function()
+	local oneStep = PresentationMath.approach(0, 100, 10, 0.1)
+	local twoSteps = PresentationMath.approach(0, 100, 10, 0.05)
+	twoSteps = PresentationMath.approach(twoSteps, 100, 10, 0.05)
+	assert(math.abs(oneStep - twoSteps) < 0.0001, "Two half-steps should equal one full step")
+end)
+
+check("presentation smoothing ignores invalid time", function()
+	assert(PresentationMath.approach(20, 80, 10, 0) == 20, "Zero dt must not change the value")
+	assert(PresentationMath.approach(20, 80, 0, 1) == 20, "Zero rate must not change the value")
+end)
+
+-- ---------------------------------------------------------- crew rotation
+
+check("two-player SWAP exchanges Driver and Strapper", function()
+	local plan, newDriver = CrewRotation.plan("driver", { { id = "strapper", station = "FR" } }, LabConfig.StationOrder)
+	assert(newDriver == "strapper", "The Strapper should take the wheel")
+	assert(plan.driver.role == "Strapper" and plan.driver.station == "FR", "Driver should take the vacated station")
+	assert(plan.strapper.role == "Driver" and plan.strapper.station == nil, "Strapper should become Driver")
+end)
+
+check("four-player SWAP rotates every occupied slot", function()
+	local plan, newDriver = CrewRotation.plan("driver", {
+		{ id = "one", station = "FL" },
+		{ id = "two", station = "FR" },
+		{ id = "three", station = "RL" },
+	}, LabConfig.StationOrder)
+	assert(newDriver == "three", "Last occupied station should take the wheel")
+	assert(plan.driver.station == "FL", "Driver should rotate into the first station")
+	assert(plan.one.station == "FR" and plan.two.station == "RL", "Strappers should advance one station")
+	assert(plan.three.role == "Driver", "Final Strapper should become Driver")
+end)
+
+check("three-player SWAP gives every player a new slot", function()
+	local plan, newDriver = CrewRotation.plan("driver", {
+		{ id = "front", station = "FL" },
+		{ id = "rear", station = "RL" },
+	}, LabConfig.StationOrder)
+	assert(newDriver == "rear", "Rear Strapper should take the wheel")
+	assert(plan.driver.station == "FL", "Driver should take the first occupied station")
+	assert(plan.front.station == "RL", "Front Strapper should advance to the rear station")
+	assert(plan.rear.role == "Driver", "Rear Strapper should become Driver")
+end)
+
+check("SWAP repairs missing or duplicate station assignments", function()
+	local plan = CrewRotation.plan(1, {
+		{ id = 2, station = "FL" },
+		{ id = 3, station = "FL" },
+		{ id = 4, station = nil },
+	}, LabConfig.StationOrder)
+	local occupied = {}
+	for _, assignment in plan do
+		if assignment.station then
+			assert(not occupied[assignment.station], "Rotation produced a duplicate station")
+			occupied[assignment.station] = true
+		end
+	end
+	assert(occupied.FL and occupied.FR and occupied.RL, "Rotation should fill the first three unique stations")
 end)
 
 -- ------------------------------------------------------------ token bucket

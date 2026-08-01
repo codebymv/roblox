@@ -20,15 +20,17 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Types = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Types"))
 
 local PROFILE_VERSION = 1
-local STORE_NAME = "CargoCatastropheProfiles_v1"
+local STORE_NAME = if RunService:IsStudio() then "CargoCatastropheProfiles_Studio_v1" else "CargoCatastropheProfiles_v1"
 local AUTOSAVE_SECONDS = 90
 local LOAD_ATTEMPTS = 4
 
 type Entry = {
 	data: Types.ProfileData,
 	dirty: boolean,
+	revision: number,
 	volatile: boolean,
 	loaded: boolean,
+	saving: boolean,
 }
 
 local PlayerDataService = {}
@@ -108,8 +110,10 @@ local function loadProfile(player: Player): Entry
 	local entry: Entry = {
 		data = defaultProfile(),
 		dirty = false,
+		revision = 0,
 		volatile = false,
 		loaded = false,
+		saving = false,
 	}
 	entries[player.UserId] = entry
 
@@ -121,7 +125,8 @@ local function loadProfile(player: Player): Entry
 	end
 
 	local lastError: string? = nil
-	for attempt = 1, LOAD_ATTEMPTS do
+	local attempts = if RunService:IsStudio() then 1 else LOAD_ATTEMPTS
+	for attempt = 1, attempts do
 		local ok, result = pcall(function()
 			return dataStore:GetAsync(keyFor(player.UserId))
 		end)
@@ -131,7 +136,9 @@ local function loadProfile(player: Player): Entry
 			return entry
 		end
 		lastError = tostring(result)
-		task.wait(attempt * 0.75)
+		if attempt < attempts then
+			task.wait(attempt * 0.75)
+		end
 	end
 
 	markVolatile(entry, lastError or "GetAsync failed")
@@ -140,21 +147,38 @@ local function loadProfile(player: Player): Entry
 end
 
 local function saveEntry(userId: number, entry: Entry): boolean
+	-- PlayerRemoving, autosave, and BindToClose can converge on the same
+	-- profile. Serialize them so an older snapshot cannot finish last.
+	while entry.saving do
+		task.wait()
+	end
 	if entry.volatile or not entry.dirty then
-		return false
+		return true
 	end
 	local dataStore = getStore()
 	if not dataStore then
 		return false
 	end
-	local snapshot = entry.data
+	-- Snapshot nested maps as well as the root. A profile may change while the
+	-- network request yields; revision keeps that later change dirty for the
+	-- next save instead of falsely acknowledging data we did not write.
+	local revision = entry.revision
+	local snapshot = table.clone(entry.data)
+	snapshot.unlockedKits = table.clone(entry.data.unlockedKits)
+	snapshot.equippedKits = table.clone(entry.data.equippedKits)
+	snapshot.unlockedPaints = table.clone(entry.data.unlockedPaints)
+	snapshot.manifestJournal = table.clone(entry.data.manifestJournal)
+	entry.saving = true
 	local ok, err = pcall(function()
 		dataStore:UpdateAsync(keyFor(userId), function()
 			return snapshot
 		end)
 	end)
+	entry.saving = false
 	if ok then
-		entry.dirty = false
+		if entry.revision == revision then
+			entry.dirty = false
+		end
 		return true
 	end
 	warn("[CargoCatastrophe] Profile save failed for " .. tostring(userId) .. ": " .. tostring(err))
@@ -163,7 +187,7 @@ end
 
 function PlayerDataService.get(player: Player): Types.ProfileData?
 	local entry = entries[player.UserId]
-	return if entry then entry.data else nil
+	return if entry and entry.loaded then entry.data else nil
 end
 
 -- Blocks until the profile is resolved. Safe to call from any server thread.
@@ -180,7 +204,7 @@ function PlayerDataService.waitFor(player: Player, timeoutSeconds: number?): Typ
 		task.wait(0.1)
 	end
 	local entry = entries[player.UserId]
-	return if entry then entry.data else nil
+	return if entry and entry.loaded then entry.data else nil
 end
 
 --[[
@@ -189,17 +213,18 @@ end
 ]]
 function PlayerDataService.update(player: Player, mutator: (Types.ProfileData) -> ()): Types.ProfileData?
 	local entry = entries[player.UserId]
-	if not entry then
+	if not entry or not entry.loaded then
 		return nil
 	end
 	mutator(entry.data)
+	entry.revision += 1
 	entry.dirty = true
 	return entry.data
 end
 
 function PlayerDataService.isVolatile(player: Player): boolean
 	local entry = entries[player.UserId]
-	return entry == nil or entry.volatile
+	return entry == nil or not entry.loaded or entry.volatile
 end
 
 function PlayerDataService.flush(player: Player)
@@ -227,12 +252,17 @@ function PlayerDataService.init()
 	Players.PlayerRemoving:Connect(function(player: Player)
 		local userId = player.UserId
 		-- Deferred so other PlayerRemoving handlers (crew cleanup, streak reset)
-		-- get their last writes in before the profile leaves the cache.
+		-- get their last writes in. Keep the entry discoverable until the save
+		-- finishes so BindToClose can wait on it during a server shutdown.
 		task.defer(function()
 			local entry = entries[userId]
-			entries[userId] = nil
-			if entry then
-				saveEntry(userId, entry)
+			if
+				entry
+				and saveEntry(userId, entry)
+				and entries[userId] == entry
+				and not Players:GetPlayerByUserId(userId)
+			then
+				entries[userId] = nil
 			end
 		end)
 	end)
@@ -241,7 +271,10 @@ function PlayerDataService.init()
 		while true do
 			task.wait(AUTOSAVE_SECONDS)
 			for userId, entry in entries do
-				saveEntry(userId, entry)
+				local saved = saveEntry(userId, entry)
+				if saved and entries[userId] == entry and not Players:GetPlayerByUserId(userId) then
+					entries[userId] = nil
+				end
 			end
 		end
 	end)
@@ -253,7 +286,6 @@ function PlayerDataService.init()
 		for userId, entry in entries do
 			saveEntry(userId, entry)
 		end
-		task.wait(1)
 	end)
 
 	print("[CargoCatastrophe] PlayerDataService ready")

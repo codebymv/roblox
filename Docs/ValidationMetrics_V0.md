@@ -1,4 +1,4 @@
-# Validation Metrics — Cargo Catastrophe V0
+# Validation Metrics · Cargo Catastrophe V0
 
 > **Partly superseded.** The first table and the vertical-slice targets are what
 > the next playtest measures, and [PlaytestProtocol_V0.md](PlaytestProtocol_V0.md)
@@ -86,7 +86,7 @@ did not.
 - Robux conversion
 - Content volume / cosmetics catalog
 - D30 retention (needs a live audience, not a playtest group)
-- Absolute credit values — tune the *shape* of the curve first, the numbers are trivial to rescale
+- Absolute credit values · tune the *shape* of the curve first, the numbers are trivial to rescale
 
 ## Decision gate
 

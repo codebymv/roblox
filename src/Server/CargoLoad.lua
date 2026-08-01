@@ -29,9 +29,17 @@ local GRAVITY = workspace.Gravity
 local CargoLoad = {}
 CargoLoad.__index = CargoLoad
 
-local HEALTHY = BrickColor.new("Bright blue")
-local STRESSED = BrickColor.new("Bright yellow")
-local CRITICAL = BrickColor.new("Neon orange")
+local HEALTHY = BrickColor.new("Cork")
+local STRESSED = BrickColor.new("Gold")
+local CRITICAL = BrickColor.new("Rust")
+
+local MARKER_REFIT = Color3.fromRGB(255, 205, 90)
+local MARKER_OUT_OF_REACH = Color3.fromRGB(220, 90, 90)
+local CARGO_COLORS = {
+	GeneralFreight = Color3.fromRGB(214, 132, 52),
+	TowerLoad = Color3.fromRGB(185, 108, 55),
+	CompactGenerator = Color3.fromRGB(78, 94, 108),
+}
 
 function CargoLoad.new(chassis, parent: Instance)
 	local self = setmetatable({
@@ -46,6 +54,11 @@ function CargoLoad.new(chassis, parent: Instance)
 		lost = false,
 		lastCause = "",
 		shockCooldown = {},
+		pendingBreaks = {} :: { string },
+		pendingRefits = {} :: { string },
+		brackets = {},
+		home = LabConfig.CrateHome,
+		variantModel = nil,
 	}, CargoLoad)
 
 	self:_build()
@@ -54,6 +67,23 @@ end
 
 function CargoLoad:_build()
 	local body = self.chassisRig:getChassis()
+
+	local pallet = Instance.new("Part")
+	pallet.Name = "Pallet"
+	pallet.Size = Vector3.new(6.4, 0.35, 6.4)
+	local palletCenterY = LabConfig.CrateHome.Y - LabConfig.CrateSize.Y * 0.5 - 0.18
+	pallet.CFrame = body.CFrame * CFrame.new(LabConfig.CrateHome.X, palletCenterY, LabConfig.CrateHome.Z)
+	pallet.Color = Color3.fromRGB(118, 82, 48)
+	pallet.Material = Enum.Material.WoodPlanks
+	pallet.Anchored = false
+	pallet.CanCollide = true
+	pallet.CustomPhysicalProperties = PhysicalProperties.new(0.9, 0.55, 0, 1, 1)
+	pallet.Parent = self.parent
+
+	local palletWeld = Instance.new("WeldConstraint")
+	palletWeld.Part0 = body
+	palletWeld.Part1 = pallet
+	palletWeld.Parent = body
 
 	local crate = Instance.new("Part")
 	crate.Name = "Crate"
@@ -66,12 +96,33 @@ function CargoLoad:_build()
 	crate.CustomPhysicalProperties = PhysicalProperties.new(LabConfig.CrateDensity, 0.55, 0.05, 2, 1)
 	crate.Parent = self.parent
 
+	for _, id in LabConfig.StrapOrder do
+		local corner = LabConfig.StrapCrateLocal[id]
+		local bracket = Instance.new("Part")
+		bracket.Name = "Bracket_" .. id
+		bracket.Size = Vector3.new(0.38, 0.38, 0.38)
+		bracket.Color = Color3.fromRGB(88, 94, 102)
+		bracket.Material = Enum.Material.Metal
+		bracket.Anchored = false
+		bracket.CanCollide = false
+		bracket.Massless = true
+		bracket.CFrame = crate.CFrame * CFrame.new(corner)
+		bracket.Parent = self.parent
+
+		local bracketWeld = Instance.new("WeldConstraint")
+		bracketWeld.Part0 = crate
+		bracketWeld.Part1 = bracket
+		bracketWeld.Parent = crate
+		self.brackets[id] = { part = bracket, weld = bracketWeld }
+	end
+
 	local dragRayParams = RaycastParams.new()
 	dragRayParams.FilterType = Enum.RaycastFilterType.Exclude
 	dragRayParams.IgnoreWater = true
 	dragRayParams.FilterDescendantsInstances = { self.chassisRig:getModel(), crate }
 
 	self.crate = crate
+	self.pallet = pallet
 	self.dragRayParams = dragRayParams
 	self.crateMass = crate.AssemblyMass
 
@@ -97,14 +148,181 @@ function CargoLoad:_build()
 			reattachable = false,
 			workedBy = nil,
 			reattachProgress = 0,
+			marker = nil,
+			markerLabel = nil,
 		}
 
+		self:_makeMarker(id)
 		self:_makeRope(id)
 	end
 
 	-- The suspension has to know about the crate so it does not raycast into it.
 	self.chassisRig:setIgnoreList({ crate })
 	self:claimOwnership()
+end
+
+function CargoLoad:_addVariantDetail(
+	name: string,
+	size: Vector3,
+	offset: CFrame,
+	color: Color3,
+	material: Enum.Material
+): Part
+	local part = Instance.new("Part")
+	part.Name = name
+	part.Size = size
+	part.CFrame = self.crate.CFrame * offset
+	part.Color = color
+	part.Material = material
+	part.Anchored = false
+	part.CanCollide = false
+	part.CanTouch = false
+	part.CanQuery = false
+	part.Massless = true
+	part.Parent = self.variantModel
+
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = self.crate
+	weld.Part1 = part
+	weld.Parent = part
+	return part
+end
+
+-- Distinct dressing makes the cargo roll readable from the chase camera.
+-- These pieces are visual-only and are recreated while staging.
+function CargoLoad:_buildVariantDetails(variant)
+	if self.variantModel then
+		self.variantModel:Destroy()
+	end
+	local model = Instance.new("Model")
+	model.Name = "CargoDetails"
+	model.Parent = self.parent
+	self.variantModel = model
+
+	local size = self.crate.Size
+	local frontZ = -size.Z * 0.5 - 0.07
+	local rearZ = size.Z * 0.5 + 0.07
+	if variant.id == "GeneralFreight" then
+		for index, yScale in { -0.3, 0, 0.3 } do
+			for _, z in { frontZ, rearZ } do
+				self:_addVariantDetail(
+					"TimberSlat" .. tostring(index),
+					Vector3.new(size.X * 0.9, 0.18, 0.14),
+					CFrame.new(0, size.Y * yScale, z),
+					Color3.fromRGB(112, 72, 38),
+					Enum.Material.Wood
+				)
+			end
+		end
+	elseif variant.id == "TowerLoad" then
+		for _, x in { -1, 1 } do
+			for _, z in { -1, 1 } do
+				self:_addVariantDetail(
+					"CornerBrace",
+					Vector3.new(0.18, size.Y * 0.92, 0.18),
+					CFrame.new(x * (size.X * 0.5 + 0.06), 0, z * (size.Z * 0.5 + 0.06)),
+					Color3.fromRGB(245, 180, 48),
+					Enum.Material.Metal
+				)
+			end
+		end
+		self:_addVariantDetail(
+			"TopCap",
+			Vector3.new(size.X + 0.25, 0.2, size.Z + 0.25),
+			CFrame.new(0, size.Y * 0.5 + 0.08, 0),
+			Color3.fromRGB(245, 180, 48),
+			Enum.Material.Metal
+		)
+	else
+		self:_addVariantDetail(
+			"GeneratorTop",
+			Vector3.new(size.X * 0.82, 0.24, size.Z * 0.78),
+			CFrame.new(0, size.Y * 0.5 + 0.1, 0),
+			Color3.fromRGB(38, 44, 50),
+			Enum.Material.Metal
+		)
+		for _, side in { -1, 1 } do
+			local x = side * (size.X * 0.5 + 0.07)
+			for row = -1, 1 do
+				self:_addVariantDetail(
+					"Vent",
+					Vector3.new(0.14, 0.16, size.Z * 0.54),
+					CFrame.new(x, row * 0.38, 0),
+					Color3.fromRGB(24, 28, 32),
+					Enum.Material.Metal
+				)
+			end
+		end
+	end
+
+	local plate = self:_addVariantDetail(
+		"CargoPlacard",
+		Vector3.new(math.min(size.X * 0.76, 4.8), math.min(size.Y * 0.22, 1.25), 0.12),
+		CFrame.new(0, 0, rearZ + 0.03),
+		Color3.fromRGB(32, 36, 42),
+		Enum.Material.Metal
+	)
+	local gui = Instance.new("SurfaceGui")
+	gui.Name = "CargoLabel"
+	gui.Face = Enum.NormalId.Back
+	gui.LightInfluence = 0
+	gui.PixelsPerStud = 32
+	gui.Parent = plate
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.GothamBlack
+	label.TextScaled = true
+	label.TextColor3 = Color3.fromRGB(245, 220, 125)
+	label.Text = variant.label
+	label.Parent = gui
+end
+
+-- Apply a run's cargo geometry while the truck is parked. Strap attachments
+-- follow the resized load, so the tall and compact variants change real
+-- leverage rather than merely changing the label above the HUD.
+function CargoLoad:configure(variant)
+	local crate = self.crate
+	local body = self.chassisRig:getChassis()
+	if not crate or not body or not variant then
+		return
+	end
+
+	local wasAnchored = crate.Anchored
+	crate.Anchored = true
+	local size = Vector3.new(
+		LabConfig.CrateSize.X * variant.scaleX,
+		LabConfig.CrateSize.Y * variant.scaleY,
+		LabConfig.CrateSize.Z * variant.scaleZ
+	)
+	local bedHeight = LabConfig.CrateHome.Y - LabConfig.CrateSize.Y * 0.5
+	self.home = Vector3.new(LabConfig.CrateHome.X, bedHeight + size.Y * 0.5, LabConfig.CrateHome.Z)
+	crate.Size = size
+	crate.CFrame = body.CFrame * CFrame.new(self.home)
+	crate.Color = CARGO_COLORS[variant.id] or CARGO_COLORS.GeneralFreight
+	crate.CustomPhysicalProperties = PhysicalProperties.new(variant.density, 0.55, 0.05, 2, 1)
+
+	for _, id in LabConfig.StrapOrder do
+		local base = LabConfig.StrapCrateLocal[id]
+		local corner = Vector3.new(base.X * variant.scaleX, base.Y * variant.scaleY, base.Z * variant.scaleZ)
+		local strap = self.straps[id]
+		strap.crateAttachment.Position = corner
+
+		local bracket = self.brackets[id]
+		if bracket then
+			bracket.weld:Destroy()
+			bracket.part.CFrame = crate.CFrame * CFrame.new(corner)
+			local weld = Instance.new("WeldConstraint")
+			weld.Part0 = crate
+			weld.Part1 = bracket.part
+			weld.Parent = crate
+			bracket.weld = weld
+		end
+	end
+	self:_buildVariantDetails(variant)
+
+	crate.Anchored = wasAnchored
+	self.crateMass = crate.AssemblyMass
 end
 
 --[[
@@ -125,6 +343,63 @@ function CargoLoad:claimOwnership()
 	end)
 end
 
+--[[
+	A broken strap has no rope left to colour, so the only presence it keeps in
+	the world is this billboard. Disabled while the strap is intact; enabled and
+	recoloured from step once it snaps.
+]]
+function CargoLoad:_makeMarker(id: string)
+	local strap = self.straps[id]
+
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name = "StrapMarker_" .. id
+	billboard.Adornee = strap.railAttachment
+	billboard.Size = UDim2.fromOffset(110, 28)
+	billboard.StudsOffset = Vector3.new(0, 1.6, 0)
+	billboard.AlwaysOnTop = true
+	billboard.Enabled = false
+	billboard.Parent = self.parent
+
+	local label = Instance.new("TextLabel")
+	label.Name = "Text"
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.GothamBold
+	label.TextSize = 16
+	label.TextColor3 = MARKER_REFIT
+	label.TextStrokeTransparency = 0.4
+	label.Text = ""
+	label.Parent = billboard
+
+	strap.marker = billboard
+	strap.markerLabel = label
+end
+
+function CargoLoad:_updateMarker(strap)
+	local marker = strap.marker
+	local label = strap.markerLabel
+	if not marker or not label then
+		return
+	end
+
+	local enabled = strap.broken
+	if marker.Enabled ~= enabled then
+		marker.Enabled = enabled
+	end
+	if not enabled then
+		return
+	end
+
+	local text = if strap.reattachable then strap.id .. " REFIT" else strap.id .. " OUT OF REACH"
+	local color = if strap.reattachable then MARKER_REFIT else MARKER_OUT_OF_REACH
+	if label.Text ~= text then
+		label.Text = text
+	end
+	if label.TextColor3 ~= color then
+		label.TextColor3 = color
+	end
+end
+
 function CargoLoad:_makeRope(id: string)
 	local strap = self.straps[id]
 	if strap.rope then
@@ -138,12 +413,13 @@ function CargoLoad:_makeRope(id: string)
 	rope.Length = strap.restLength + strap.stretch
 	rope.Restitution = 0
 	rope.Visible = true
-	rope.Thickness = 0.22
+	rope.Thickness = LabConfig.StrapRopeThickness
 	rope.Color = HEALTHY
 	rope.Parent = self.chassisRig:getChassis()
 
 	strap.rope = rope
 	strap.broken = false
+	self:_updateMarker(strap)
 end
 
 function CargoLoad:_breakStrap(id: string, cause: string)
@@ -160,6 +436,8 @@ function CargoLoad:_breakStrap(id: string, cause: string)
 		strap.rope = nil
 	end
 	self.lastCause = string.format("%s strap failed (%s)", id, cause)
+	table.insert(self.pendingBreaks, id)
+	self:_updateMarker(strap)
 end
 
 function CargoLoad:getCrate(): BasePart
@@ -189,6 +467,16 @@ function CargoLoad:weakenStrap(id: string, amount: number)
 	end
 end
 
+-- A short, physical velocity change used by the pressure director. Outcomes
+-- still come from the crate, ropes, road, and driver response.
+function CargoLoad:applyJolt(velocityChange: Vector3)
+	local crate = self.crate
+	if crate and crate.Parent and not crate.Anchored then
+		crate:ApplyImpulse(velocityChange * self.crateMass)
+		self.lastCause = "cargo jolt"
+	end
+end
+
 function CargoLoad:tighten(id: string, dt: number, workerName: string?): boolean
 	local strap = self.straps[id]
 	if not strap then
@@ -209,6 +497,7 @@ function CargoLoad:tighten(id: string, dt: number, workerName: string?): boolean
 			strap.reattachProgress = 0
 			self:_makeRope(id)
 			self.lastCause = string.format("%s strap refitted", id)
+			table.insert(self.pendingRefits, id)
 			return true
 		end
 		return false
@@ -235,7 +524,7 @@ end
 function CargoLoad:step(dt: number)
 	local crate = self.crate
 	local body = self.chassisRig:getChassis()
-	if not crate or not crate.Parent or not body then
+	if not crate or not crate.Parent or not body or crate.Anchored or body.Anchored then
 		return
 	end
 
@@ -257,6 +546,7 @@ function CargoLoad:step(dt: number)
 			local gap = (strap.railAttachment.WorldPosition - strap.crateAttachment.WorldPosition).Magnitude
 			strap.reattachable = gap <= LabConfig.StrapReattachMaxGap
 			strap.tension = 0
+			self:_updateMarker(strap)
 			continue
 		end
 
@@ -300,7 +590,7 @@ function CargoLoad:step(dt: number)
 			strap.rope.Length = strap.restLength + strap.stretch
 			local ratio = strap.health / LabConfig.StrapMaxHealth
 			strap.rope.Color = if ratio > 0.6 then HEALTHY elseif ratio > 0.28 then STRESSED else CRITICAL
-			strap.rope.Thickness = 0.18 + math.clamp(strap.tension, 0, 2) * 0.09
+			strap.rope.Thickness = LabConfig.StrapRopeThickness + math.clamp(strap.tension, 0, 2) * 0.08
 		end
 	end
 
@@ -311,7 +601,7 @@ function CargoLoad:_updateCondition(dt: number, bodyCF: CFrame)
 	local crate = self.crate
 
 	local localPosition = bodyCF:PointToObjectSpace(crate.Position)
-	local delta = localPosition - LabConfig.CrateHome
+	local delta = localPosition - self.home
 	self.localOffset = delta
 	self.offset = Vector3.new(delta.X, 0, delta.Z).Magnitude
 
@@ -329,7 +619,7 @@ function CargoLoad:_updateCondition(dt: number, bodyCF: CFrame)
 	end
 
 	-- Is the load physically scraping the ground?
-	local down = Vector3.new(0, -(LabConfig.CrateSize.Y * 0.5 + 0.8), 0)
+	local down = Vector3.new(0, -(crate.Size.Y * 0.5 + 0.8), 0)
 	local hit = workspace:Raycast(crate.Position, down, self.dragRayParams)
 	local horizontalSpeed = Vector3.new(crate.AssemblyLinearVelocity.X, 0, crate.AssemblyLinearVelocity.Z).Magnitude
 	self.dragging = hit ~= nil and self.offset > LabConfig.ShiftedOffset and horizontalSpeed > 3
@@ -396,6 +686,31 @@ function CargoLoad:consumeConditionChange(): (boolean, string?, string?)
 	return true, self.previousCondition, if cause ~= "" then cause else nil
 end
 
+--[[
+	Drain the ids that snapped since the last call. Networking stays out of
+	this module; LabSession toasts a refit instruction for each one.
+]]
+function CargoLoad:consumeStrapBreaks(): { string }
+	local breaks = self.pendingBreaks
+	if #breaks == 0 then
+		return breaks
+	end
+	self.pendingBreaks = {}
+	return breaks
+end
+
+-- Drain successful refits separately from breaks. Keeping these as edge
+-- events prevents the 20 Hz simulation from counting the same repaired strap
+-- on every frame after it becomes healthy again.
+function CargoLoad:consumeStrapRefits(): { string }
+	local refits = self.pendingRefits
+	if #refits == 0 then
+		return refits
+	end
+	self.pendingRefits = {}
+	return refits
+end
+
 function CargoLoad:snapshotStraps(): { LabTypes.StrapSnapshot }
 	local list = {}
 	for index, id in LabConfig.StrapOrder do
@@ -428,16 +743,28 @@ function CargoLoad:reseat()
 
 	crate.AssemblyLinearVelocity = Vector3.zero
 	crate.AssemblyAngularVelocity = Vector3.zero
-	crate.CFrame = body.CFrame * CFrame.new(LabConfig.CrateHome)
+	crate.CFrame = body.CFrame * CFrame.new(self.home)
 	crate.AssemblyLinearVelocity = Vector3.zero
 	crate.AssemblyAngularVelocity = Vector3.zero
 end
 
+function CargoLoad:setFrozen(frozen: boolean)
+	local crate = self.crate
+	if not crate or not crate.Parent then
+		return
+	end
+	crate.AssemblyLinearVelocity = Vector3.zero
+	crate.AssemblyAngularVelocity = Vector3.zero
+	crate.Anchored = frozen
+end
+
 function CargoLoad:reset()
+	self:setFrozen(false)
 	self:reseat()
 
 	for _, id in LabConfig.StrapOrder do
 		local strap = self.straps[id]
+		strap.restLength = (strap.railAttachment.WorldPosition - strap.crateAttachment.WorldPosition).Magnitude
 		strap.health = LabConfig.StrapMaxHealth
 		strap.tension = 0
 		strap.stretch = 0
@@ -457,9 +784,23 @@ function CargoLoad:reset()
 	self.lost = false
 	self.lastCause = ""
 	self.shockCooldown = {}
+	table.clear(self.pendingBreaks)
+	table.clear(self.pendingRefits)
 end
 
 function CargoLoad:destroy()
+	if self.variantModel then
+		self.variantModel:Destroy()
+		self.variantModel = nil
+	end
+	for _, id in LabConfig.StrapOrder do
+		local strap = self.straps[id]
+		if strap and strap.marker then
+			strap.marker:Destroy()
+			strap.marker = nil
+			strap.markerLabel = nil
+		end
+	end
 	if self.crate then
 		self.crate:Destroy()
 		self.crate = nil

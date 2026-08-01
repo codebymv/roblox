@@ -121,7 +121,7 @@ function FailureRunner:_fire(def: Types.FailureDef, windowOverride: number?): bo
 	}
 	self._lastFailureId = def.id
 	self._callbacks.onPrompt(def, expiresAt)
-	self._callbacks.onToast(def.label .. " — " .. def.responsibleRole)
+	self._callbacks.onToast(def.label .. " · " .. def.responsibleRole)
 
 	task.delay(window, function()
 		local current = self._active

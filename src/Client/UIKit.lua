@@ -22,7 +22,16 @@
 	cheaper path.
 ]]
 
+local GuiService = game:GetService("GuiService")
+local Workspace = game:GetService("Workspace")
+
 local UIKit = {}
+
+-- Authored against this reference; smaller viewports shrink, larger ones grow
+-- a little so 4K text is not hairline-thin. Caps keep phone chrome usable.
+UIKit.DesignResolution = Vector2.new(1280, 720)
+UIKit.MinScale = 0.55
+UIKit.MaxScale = 1.2
 
 UIKit.Theme = {
 	Panel = Color3.fromRGB(16, 18, 22),
@@ -83,14 +92,151 @@ function UIKit.corner(instance: Instance, radius: number?): UICorner
 	return corner
 end
 
+--[[
+	Shrink-to-fit text inside its box instead of painting past the edges.
+	Used on every player-facing button and on labels that change length at
+	runtime.
+]]
+function UIKit.fitText(element: TextLabel | TextButton, maxSize: number?, minSize: number?)
+	-- Luau's Roblox definitions do not currently expose the shared text
+	-- properties through this union even though both classes support them.
+	(element :: any).TextScaled = true
+	(element :: any).TextWrapped = true
+	local constraint = Instance.new("UITextSizeConstraint")
+	constraint.MaxTextSize = maxSize or 16
+	constraint.MinTextSize = minSize or 9
+	constraint.Parent = element
+	local pad = Instance.new("UIPadding")
+	pad.PaddingLeft = UDim.new(0, 6)
+	pad.PaddingRight = UDim.new(0, 6)
+	pad.PaddingTop = UDim.new(0, 4)
+	pad.PaddingBottom = UDim.new(0, 4)
+	pad.Parent = element
+	return element
+end
+
+function UIKit.horizontalRow(parent: Instance, name: string, height: number): Frame
+	local row = Instance.new("Frame")
+	row.Name = name
+	row.BackgroundTransparency = 1
+	row.BorderSizePixel = 0
+	row.Size = UDim2.new(1, 0, 0, height)
+	row.Parent = parent
+
+	local layout = Instance.new("UIListLayout")
+	layout.FillDirection = Enum.FillDirection.Horizontal
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Padding = UDim.new(0, 6)
+	layout.VerticalAlignment = Enum.VerticalAlignment.Center
+	layout.Parent = row
+
+	local pad = Instance.new("UIPadding")
+	pad.PaddingLeft = UDim.new(0, 12)
+	pad.PaddingRight = UDim.new(0, 12)
+	pad.Parent = row
+
+	return row
+end
+
 function UIKit.screen(name: string, parent: Instance): ScreenGui
 	local gui = Instance.new("ScreenGui")
 	gui.Name = name
 	gui.ResetOnSpawn = false
+	-- Full-bleed so the truck camera is not letterboxed; SafeArea below
+	-- respects the topbar / home-indicator insets so panels do not collide.
 	gui.IgnoreGuiInset = true
 	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 	gui.Parent = parent
+
+	local scale = Instance.new("UIScale")
+	scale.Name = "ResponsiveScale"
+	scale.Parent = gui
+	UIKit.bindResponsiveScale(gui)
+
 	return gui
+end
+
+--[[
+	A full-screen root that pads itself by the current GuiInset. Every player-
+	facing panel should parent here rather than to the ScreenGui directly.
+]]
+function UIKit.safeArea(parent: Instance): Frame
+	local root = Instance.new("Frame")
+	root.Name = "SafeArea"
+	root.BackgroundTransparency = 1
+	root.BorderSizePixel = 0
+	root.Size = UDim2.fromScale(1, 1)
+	root.Parent = parent
+
+	local padding = Instance.new("UIPadding")
+	padding.Name = "InsetPadding"
+	padding.Parent = root
+
+	local function responsiveFactor(): number
+		local responsiveScale = parent:FindFirstChild("ResponsiveScale")
+		if responsiveScale and responsiveScale:IsA("UIScale") then
+			return math.max(0.01, responsiveScale.Scale)
+		end
+		return 1
+	end
+
+	local function applyInset()
+		local factor = responsiveFactor()
+		local inset = GuiService:GetGuiInset()
+		-- UIScale also scales the full-screen root. Grow its logical bounds by
+		-- the inverse factor so right/bottom anchored panels stay on-screen.
+		root.Size = UDim2.fromScale(1 / factor, 1 / factor)
+		-- Topbar + a little air; bottom for home indicator / gesture bar.
+		padding.PaddingTop = UDim.new(0, (inset.Y + 8) / factor)
+		padding.PaddingBottom = UDim.new(0, math.max(8, inset.Y * 0.35) / factor)
+		padding.PaddingLeft = UDim.new(0, 8 / factor)
+		padding.PaddingRight = UDim.new(0, 8 / factor)
+	end
+
+	applyInset()
+	pcall(function()
+		GuiService:GetPropertyChangedSignal("TopbarInset"):Connect(applyInset)
+	end)
+	local responsiveScale = parent:FindFirstChild("ResponsiveScale")
+	if responsiveScale and responsiveScale:IsA("UIScale") then
+		responsiveScale:GetPropertyChangedSignal("Scale"):Connect(applyInset)
+	end
+	return root
+end
+
+function UIKit.bindResponsiveScale(gui: ScreenGui)
+	local scale = gui:FindFirstChild("ResponsiveScale")
+	if not scale or not scale:IsA("UIScale") then
+		return
+	end
+
+	local function refresh()
+		local camera = Workspace.CurrentCamera
+		if not camera then
+			return
+		end
+		local size = camera.ViewportSize
+		local design = UIKit.DesignResolution
+		local factor = math.min(size.X / design.X, size.Y / design.Y)
+		scale.Scale = math.clamp(factor, UIKit.MinScale, UIKit.MaxScale)
+	end
+
+	local viewportConnection: RBXScriptConnection? = nil
+	local function bindCamera(camera: Camera?)
+		if viewportConnection then
+			viewportConnection:Disconnect()
+			viewportConnection = nil
+		end
+		if camera then
+			viewportConnection = camera:GetPropertyChangedSignal("ViewportSize"):Connect(refresh)
+		end
+		refresh()
+	end
+
+	bindCamera(Workspace.CurrentCamera)
+	Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+		bindCamera(Workspace.CurrentCamera)
+	end)
 end
 
 -- A plain container with no chrome. For rows and tracks inside a panel.
@@ -128,12 +274,17 @@ function UIKit.button(props: { [string]: any }?): TextButton
 	element.BackgroundColor3 = Theme.Button
 	element.BorderSizePixel = 0
 	element.AutoButtonColor = true
+	-- Gamepad GUI navigation steals the D-pad otherwise, which is how
+	-- strappers cycle stations on a controller.
+	element.Selectable = false
 	element.Font = Enum.Font.GothamBold
 	element.TextSize = 16
 	element.TextColor3 = Color3.fromRGB(240, 240, 240)
 	element.Text = ""
+	element.ClipsDescendants = true
 	apply(element, props)
 	UIKit.corner(element, props and props.CornerRadius or Theme.ButtonCorner)
+	UIKit.fitText(element, props and props.MaxTextSize or 15, 9)
 	return element
 end
 
@@ -171,6 +322,15 @@ end
 function UIKit.setVisible(element: GuiObject, visible: boolean)
 	if element.Visible ~= visible then
 		element.Visible = visible
+	end
+end
+
+function UIKit.setActive(element: GuiButton, active: boolean)
+	if element.Active ~= active then
+		element.Active = active
+	end
+	if element.AutoButtonColor ~= active then
+		element.AutoButtonColor = active
 	end
 end
 

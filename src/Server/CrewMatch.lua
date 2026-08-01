@@ -149,25 +149,25 @@ end
 function CrewMatch:_objective(): string
 	local phase = self.phase
 	if phase == "Idle" then
-		return "Bay open — step on the pad to crew up"
+		return "Bay open. Step on the pad to crew up"
 	elseif phase == "Staging" then
-		return string.format("Ready up (%d/%d) — departing automatically", self:_countReady(), #self.members)
+		return string.format("Ready up (%d/%d). Departing automatically", self:_countReady(), #self.members)
 	elseif phase == "Departing" then
 		return "Rolling out in " .. tostring(self.countdownSeconds) .. "..."
 	elseif phase == "Run" then
 		if self.lastFailureLabel then
 			return "Handle: " .. self.lastFailureLabel
 		end
-		return string.format("Leg %d — haul to the blue delivery zone", self.leg)
+		return string.format("Leg %d · haul to the blue delivery zone", self.leg)
 	elseif phase == "DeliveryHold" then
-		return "DELIVERY HOLD — stop inside the glowing zone"
+		return "DELIVERY HOLD · stop inside the glowing zone"
 	elseif phase == "BankOrPush" then
 		return string.format("Leg %d delivered. Bank %d credits, or push for more?", self.leg, self.carriedValue)
 	elseif phase == "Resolve" then
 		if self.failReason == "Banked" then
 			return string.format("Banked %d credits after %d legs", self.carriedValue, self.leg)
 		end
-		return "Convoy lost — " .. tostring(self.failReason or "CargoLost")
+		return "Convoy lost: " .. tostring(self.failReason or "CargoLost")
 	end
 	return "Cargo Catastrophe"
 end
@@ -333,7 +333,7 @@ function CrewMatch:removeMember(player: Player)
 	if wasLive and not self.roles:hasRole("Driver") then
 		self.roles:assignForPlayers(self.members)
 		self:_applyKitWindows()
-		self:_toast("Driver left — roles reassigned mid-haul.")
+		self:_toast("Driver left. Roles reassigned mid-haul.")
 	end
 
 	self:_updateCrewTag()
@@ -358,7 +358,7 @@ end
 
 function CrewMatch:_updateCrewTag()
 	if #self.members == 0 then
-		self.rig:setCrewTag("BAY " .. tostring(self.bayIndex) .. " — OPEN")
+		self.rig:setCrewTag("BAY " .. tostring(self.bayIndex) .. " · OPEN")
 		return
 	end
 	local best = 0
@@ -721,7 +721,7 @@ function CrewMatch:_enterDeliveryHold()
 	self.rig:setDeliveryCue(true)
 	self:_updatePressure(1)
 	self:_setPhase("DeliveryHold")
-	self:_toast("DELIVERY HOLD — stop inside the glowing zone.")
+	self:_toast("DELIVERY HOLD · stop inside the glowing zone.")
 end
 
 function CrewMatch:_runLeg()
@@ -757,7 +757,7 @@ function CrewMatch:_runLeg()
 				if self.roles:hasRole("Strapper") then
 					runner:fireById("LooseStrap", 12)
 				elseif self.cornerStage == 0 then
-					self:_toast("Bend coming up early on this leg — brake for it.")
+					self:_toast("Bend coming up early on this leg. Brake for it.")
 					if runner:fireById("SharpTurn", 12) then
 						self.cornerStage = 3
 					end
@@ -812,7 +812,7 @@ function CrewMatch:_runLeg()
 			local integrity = self:_damageTruck(MatchConfig.OffRoadTruckDamagePerSecond * dt)
 			if self.cargoStability <= 70 and self.rig:getCargoState() == "Stable" then
 				self.rig:setCargoState("Tipping")
-				self:_toast("Get back on the road — the load is sliding.")
+				self:_toast("Get back on the road. The load is sliding.")
 			end
 			if integrity <= 0 then
 				self:_wipe("TruckTotaled")
@@ -886,7 +886,7 @@ function CrewMatch:_deliverLeg()
 		self.decisionSeconds = 0
 		if self.phase == "BankOrPush" then
 			-- Timing out banks. The safe outcome should never require a reaction.
-			self:_toast("No call made — dispatch banked the load.")
+			self:_toast("No call made. Dispatch banked the load.")
 			self:_bank()
 		end
 	end)
@@ -966,7 +966,7 @@ function CrewMatch:_wipe(reason: Types.FailReason)
 	if lost > 0 then
 		self:_toast(string.format("Convoy lost. %d unbanked credits gone.", lost))
 	else
-		self:_toast("Convoy lost — " .. reason .. ".")
+		self:_toast("Convoy lost: " .. reason .. ".")
 	end
 	self:_updateCrewTag()
 	self:_enterResolve()

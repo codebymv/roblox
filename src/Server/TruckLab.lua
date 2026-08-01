@@ -3,8 +3,8 @@
 --[[
 	The fun-test build's composition root.
 
-	One crew, one truck, one route, one crate. No credits, no shop, no bays, no
-	persistence, no leg ladder. A run starts within a couple of seconds of
+	One crew, one truck, one route, one crate. Persistent run rewards and truck
+	paint sit around the loop; bays, role kits and the leg ladder stay out. A run starts within a couple of seconds of
 	joining and restarts within a couple of seconds of ending, because the only
 	thing being measured is whether the thing in between is worth doing again.
 
@@ -17,6 +17,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Net = require(Shared:WaitForChild("Net"))
+local DevConfig = require(Shared:WaitForChild("DevConfig"))
+local LabConfig = require(Shared:WaitForChild("LabConfig"))
 
 local DevCommands = require(script.Parent.DevCommands)
 local LabSession = require(script.Parent.LabSession)
@@ -48,7 +50,13 @@ function TruckLab.init()
 		end,
 	})
 
-	print("[CargoLab] Fun-test mode running. One crew, one route, physics truck.")
+	print(
+		string.format(
+			"[CargoLab] Fun-test mode running (%s). One %d-player crew, one route, physics truck.",
+			DevConfig.Profile,
+			LabConfig.MaxCrew
+		)
+	)
 end
 
 -- The live session, for the smoke test and the developer commands.

@@ -235,13 +235,11 @@ end
 local function refreshStandings(snap: Types.DepotSnapshot)
 	for index, label in streakRows do
 		local row = snap.topStreak[index]
-		label.Text = if row then string.format("  %d. %s — %d (%s)", index, row.name, row.value, row.detail) else ""
+		label.Text = if row then string.format("  %d. %s · %d (%s)", index, row.name, row.value, row.detail) else ""
 	end
 	for index, label in haulRows do
 		local row = snap.topHaul[index]
-		label.Text = if row
-			then string.format("  %d. %s — %d cr (%s)", index, row.name, row.value, row.detail)
-			else ""
+		label.Text = if row then string.format("  %d. %s · %d cr (%s)", index, row.name, row.value, row.detail) else ""
 	end
 end
 
@@ -348,7 +346,7 @@ local function buildPanel()
 		end)
 	end
 
-	makeSection("OUTFITTER — ROLE KITS")
+	makeSection("OUTFITTER · ROLE KITS")
 	for _, kit in RoleKits.getAllKits() do
 		local row = makeRow(88)
 		row.label.Size = UDim2.new(1, -108, 1, 0)
@@ -364,7 +362,7 @@ local function buildPanel()
 		end)
 	end
 
-	makeSection("OUTFITTER — CAB PAINT")
+	makeSection("OUTFITTER · CAB PAINT")
 	for _, paint in RoleKits.getAllPaints() do
 		local row = makeRow(88)
 		row.label.Size = UDim2.new(1, -108, 1, 0)

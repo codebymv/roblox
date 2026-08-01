@@ -75,14 +75,15 @@ function DebugOverlay.mount()
 
 	local gui = UIKit.screen("CargoLabDebug", player:WaitForChild("PlayerGui"))
 
+	local root = UIKit.safeArea(gui)
 	local frame = UIKit.panel({
 		Name = "Panel",
 		AnchorPoint = Vector2.new(0, 1),
-		Position = UDim2.new(0, 16, 1, -158),
+		Position = UDim2.new(0, 8, 1, -8),
 		Size = UDim2.fromOffset(360, 258),
 		BackgroundColor3 = Color3.fromRGB(8, 10, 14),
 		BackgroundTransparency = 0.2,
-		Parent = gui,
+		Parent = root,
 	})
 
 	local text = UIKit.label({

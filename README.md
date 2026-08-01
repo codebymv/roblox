@@ -1,4 +1,4 @@
-# Roblox — Co-op Cargo Catastrophe
+# Roblox · Co-op Cargo Catastrophe
 
 Prototype project for a **Co-op Operational Catastrophe** experience on Roblox:
 
@@ -12,12 +12,17 @@ This folder is intentionally separate from the UE5 PlatypunkGame repo.
 
 | Mode | What runs | What it is for |
 |---|---|---|
-| `FunTest` **(current default)** | `TruckLab`: one crew, one physics truck, one route, one crate | Answering whether the core interaction is fun at all |
+| `FunTest` **(current default)** | `TruckLab`: one crew, one physics truck, one route, persistent rewards and truck paint | Public playtest and progression validation |
 | `Depot` | `DepotService`: four bays, economy, persistence, kits, leg ladder | The full meta build |
 
-Nothing is deleted between the two. In `FunTest` the depot, economy, persistence,
-shop, live-ops and leg ladder simply never initialise, so there is no DataStore
-traffic and nothing standing between a player and the truck.
+Nothing is deleted between the two. In `FunTest` the old depot, role kits,
+live-ops and leg ladder never initialise. The shared profile cache now records
+Cargo Cash and truck-paint ownership around the current physics run.
+
+Tooling profiles are separate from the mode switch. Studio automatically uses
+`Development` (debug overlay, live tuning, commands, and run artifacts), while
+published servers use a fail-closed `Release` profile with only server telemetry
+left on. The fun-test place is capped to one four-player crew.
 
 The prototype was moved into `FunTest` after
 [Docs/CoreFunAudit_V0.md](Docs/CoreFunAudit_V0.md) found that the truck was an
@@ -75,7 +80,8 @@ lune run Tests/Headless.luau
 
 **Enable DataStores before testing progression.** Game Settings → Security → *Enable Studio Access
 to API Services*. Without it the server runs profiles in volatile mode: everything works, nothing
-saves, and it says so once in the output.
+saves, and it says so once in the output. Studio uses a separate test store, so these checks cannot
+overwrite live player balances.
 
 ## The fun-test loop (`DevConfig.Mode = "FunTest"`)
 
@@ -122,8 +128,8 @@ sit at their stations, which is cosmetic debt to be repaid, not a design choice.
 
 ### Tuning it without restarting
 
-`LabConfig` is read at the point of use — `PhysicsChassis:step` reads
-`LabConfig.GripFront` inside the wheel loop rather than hoisting it — so writing
+`LabConfig` is read at the point of use · `PhysicsChassis:step` reads
+`LabConfig.GripFront` inside the wheel loop rather than hoisting it · so writing
 a new value into the table lands on the next frame. `TuningService` exploits
 that: select `ReplicatedStorage.LabTuning` in the Explorer and edit an attribute
 in the Properties pane. There is no bespoke tuning UI to maintain, because
@@ -142,7 +148,7 @@ again.
 Each run then writes itself to `ServerStorage.LabRuns` as JSON: the input
 stream, the event timeline, the outcome, and the tuning values that produced it.
 Studio's output window is live-only, host-only and scrolls away; a run file can
-be compared against the run before it. Do not expect replay — Roblox's solver
+be compared against the run before it. Do not expect replay · Roblox's solver
 does not give determinism, so this is for comparison, not reproduction.
 
 ## The depot loop (`DevConfig.Mode = "Depot"`)
@@ -156,7 +162,7 @@ route lane, visible to everyone else in the yard.
 3. **Leg N** rolls a cargo from the manifest (rarity, value multiplier, one mechanical quirk) and
    runs a shorter clock and higher failure pressure than the leg before it.
 4. **Delivery Hold** lights the zone. Stop inside it to complete the leg.
-5. **Bank or Push** — twelve seconds. Majority rules, a tie banks, a timeout banks. Bank pays every
+5. **Bank or Push** · twelve seconds. Majority rules, a tie banks, a timeout banks. Bank pays every
    crew member the full stack in Freight Credits; push doubles down on a harder leg.
 6. **A wipe forfeits the whole unbanked stack** and resets your convoy streak.
 
@@ -169,7 +175,7 @@ speed, restore more integrity) and cab paint. Nothing purchasable skips an inter
 - **Driver (touch):** on-screen left/right, Go, Reverse, and Brake buttons.
 - **Spotter:** tap **Ping Hazard** when the warning appears.
 - **Strapper / Repair:** hold the contextual action button until the save completes.
-- **Depot panel:** `Tab` or the DEPOT button — bays, Outfitter, standings, daily bonus.
+- **Depot panel:** `Tab` or the DEPOT button · bays, Outfitter, standings, daily bonus.
 
 Leg 1 always opens with a guaranteed, generously timed save moment chosen from a role the crew
 actually has, so a first session hits the core interaction within seconds rather than watching a
@@ -187,12 +193,15 @@ worth copying into a second title. The game layer below is not.
 
 | Module | Responsibility |
 |---|---|
-| `src/Shared/DevConfig.lua` | The mode switch, and whether dev tooling is on |
+| `src/Shared/DevConfig.lua`, `src/Shared/BuildProfiles.lua` | The mode switch and automatic Development/Release tooling boundary |
 | `src/Server/LabSession.lua` | Session lifecycle: phases, join and leave, the step loop, snapshots |
 | `src/Shared/LabRemotes.lua` | Every remote declared with its payload type and a server-side validator |
 | `src/Shared/TuningSchema.lua`, `src/Server/TuningService.lua` | What is tunable, and live editing of it through attributes |
 | `src/Server/DevCommands.lua` | Warp, rebuild and dump, rate limited like any other remote |
 | `src/Server/LabTelemetry.lua` | Run timeline and the JSON artifact in `ServerStorage.LabRuns` |
+| `src/Server/LabAnalytics.lua` | Published-server onboarding funnel, run outcomes, session metrics, and structured feedback |
+| `src/Server/PlayerDataService.lua` | Shared DataStore profile cache, autosave, volatile fallback, and `BindToClose` |
+| `src/Shared/LabProgression.lua`, `src/Server/LabProgressionService.lua` | Testable run rewards plus the persistent Cargo Cash and paint adapter |
 | `src/Shared/TokenBucket.lua`, `src/Server/RateLimiter.lua` | Throttling, split into engine-free maths and a Player-keyed wrapper |
 | `src/Shared/RouteMath.lua` | Arc-length progress and its inverse, dependency-free |
 | `src/Client/UIKit.lua` | Panels, labels and buttons, plus setters that skip unchanged writes |
@@ -211,7 +220,6 @@ worth copying into a second title. The game layer below is not.
 
 | Module | Responsibility |
 |---|---|
-| `src/Server/PlayerDataService.lua` | DataStore profiles, session cache, autosave, `BindToClose` |
 | `src/Server/EconomyService.lua` | Sole authority for payouts, streaks, purchases |
 | `src/Server/WorldBuilder.lua` | Depot hub, board, four parallel lanes |
 | `src/Server/DepotService.lua` | Bays, membership, spectating, remotes, depot snapshot |

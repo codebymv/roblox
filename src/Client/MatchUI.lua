@@ -165,8 +165,8 @@ local function refresh()
 
 	local spectating = snap.spectating
 	phaseLabel.Text = if spectating
-		then string.format("WATCHING BAY %d — %s", snap.bayIndex, string.upper(snap.phase))
-		else string.format("BAY %d — %s", snap.bayIndex, string.upper(snap.phase))
+		then string.format("WATCHING BAY %d · %s", snap.bayIndex, string.upper(snap.phase))
+		else string.format("BAY %d · %s", snap.bayIndex, string.upper(snap.phase))
 	objectiveLabel.Text = snap.objective
 
 	if snap.leg > 0 then
@@ -189,13 +189,13 @@ local function refresh()
 
 	local myRole: Types.RoleId? = getMyRole(snap)
 	if spectating then
-		roleLabel.Text = "Spectating — " .. table.concat(snap.members, ", ")
+		roleLabel.Text = "Spectating · " .. table.concat(snap.members, ", ")
 	elseif myRole then
 		local info = Roles.getInfo(myRole)
-		roleLabel.Text = info.displayName .. " — " .. info.hudHint
+		roleLabel.Text = info.displayName .. " · " .. info.hudHint
 	elseif snap.phase == "Staging" or snap.phase == "Departing" then
 		roleLabel.Text = string.format(
-			"Crew %d/%d · ready %d/%d — roles assign at departure",
+			"Crew %d/%d · ready %d/%d · roles assign at departure",
 			#snap.members,
 			MatchConfig.CrewCapacity,
 			snap.readyCount,
@@ -710,7 +710,7 @@ function MatchUI.mount()
 		end
 		setToast(
 			string.format(
-				"LEG %d MANIFEST: %s (%s) — worth %d credits",
+				"LEG %d MANIFEST: %s (%s) · worth %d credits",
 				payload.leg,
 				payload.cargo.label,
 				payload.cargo.rarity,
@@ -719,7 +719,7 @@ function MatchUI.mount()
 		)
 	end)
 
-	setToast("Cargo Catastrophe — step on a bay pad, then keep the load alive.")
+	setToast("Cargo Catastrophe · step on a bay pad, then keep the load alive.")
 	requestSnapshotRemote:FireServer()
 end
 

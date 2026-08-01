@@ -5,25 +5,44 @@ The fun-test build exists to answer one question:
 > Is operating an unstable cargo vehicle together intrinsically funny, tense,
 > readable, and replayable?
 
-Everything below is designed to get an honest answer to that and nothing else.
-No progression is enabled, so nobody can be retained by rewards. If they play a
-second run, it is because the first one was worth repeating.
+Everything below is designed to get an honest answer to that first. The public
+build now awards a shallow layer of Cargo Cash and truck paint, but the reward
+appears only after the run. Observe the decision to finish and replay before
+mentioning the garage so progression does not masquerade as core fun.
 
 ---
 
 ## Before the session
 
 1. `DevConfig.Mode` is `"FunTest"`. Confirm the server log prints
-   `[CargoLab] Fun-test mode running`.
-2. `DevConfig.ShowDebugOverlay = false`. Testers must not see tuning data.
-3. `DevConfig.Telemetry = true`. The run summary prints to the server log.
-4. Have the Studio output window visible on your own screen, not theirs.
+   `[CargoLab] Fun-test mode running (Release)` in a published server.
+2. Build profiles are automatic. Studio uses `Development`; every published
+   server uses `Release`, which disables the debug overlay, live tuning,
+   developer commands, verbose physics, and Studio-only run artifacts. Server
+   startup fails closed if a future change makes that profile unsafe.
+3. The place and server crew caps both remain `4`: one Driver and three
+   Strappers. Roblox rejects a fifth join; the in-session spectator queue is a
+   defensive fallback for oversized Studio tests and failed seat attachment.
+4. Release telemetry remains on.
+5. Where you read the log depends on how they are joining. In a Studio local
+   server it is the output window, on your own screen and not theirs. On a
+   published place it is the developer console, `F9`, Server tab, which only
+   the place owner can see. Development run artifacts land in
+   `ServerStorage.LabRuns`; published servers intentionally do not create them.
+
+Tuning between sessions requires no flag editing: start a Studio session for
+the Development profile, then publish when ready. To rehearse Release inside
+Studio, temporarily set `FORCE_PROFILE` in `DevConfig.lua` to `"Release"`.
 
 ## Roles for the session
 
 Four players. One drives, three work the bed. Anyone can press `T` to hand over
 or take the wheel between runs, and you want them to, because "would you choose
 a non-driver role?" is one of the questions being tested.
+
+With two or more crew, the red `SWAP` signs force a deterministic rotation.
+Do not explain the order before the first run. Observe whether the personalized
+warning is enough for the incoming Driver to take over without being coached.
 
 ## The script
 
@@ -72,6 +91,8 @@ If a run does not produce most of these, the build is not doing its job.
 5. The truck's handling visibly changes after the load moves.
 6. At least one crisis is recovered rather than lost.
 7. At least one run ends differently from the run before it.
+8. Both SWAP gates rotate every active crew member without duplicate stations,
+   stuck controls, or a coaching prompt from the facilitator.
 
 ## Reading the telemetry
 
@@ -84,12 +105,38 @@ The server log prints a block per run. The lines that matter:
 | `cargo transitions` | 6 or more | The load is not doing enough |
 | `recoveries` | 1 or more | Failures are binary, not recoverable |
 | `station moves` | 4 or more per crew member | The Strapper is passive |
+| `crew swaps` | 2 on a complete 2+ player run | A gate was skipped or failed |
 | `idle` per crew member | under 25% of run | That role is not a role |
 | `designed cascade` | true | The opener is not landing |
 | `emergent cascade` | true on most runs | Systems are not interacting |
 
 A run where `station moves` is near zero and only the driver has actions is the
 single clearest no-go signal in the whole document.
+
+### Published analytics
+
+Published servers also send aggregated Roblox analytics; Studio deliberately
+does not. The onboarding funnel is `Joined Game` → `Crew Seat Assigned` →
+`First Crew Input` → `First Run Finished` → `Second Run Started`. Custom events
+record crew size, time to first input and crisis, outcomes, run and session
+duration, SWAP gates, mid-run departures, and the once-per-session
+`Yes`/`Maybe`/`No` replay answer. Roblox aggregates these daily, so allow up to
+24 hours before treating an empty dashboard as a wiring failure.
+
+### Progression smoke test
+
+Every active crew member receives the full server-calculated reward; bringing
+friends never splits the payout. A clean delivery pays more than a partial
+delivery, and a recoverable failure still grants a small participation amount.
+On the result screen confirm the reward and new balance agree, then during
+Result or Staging unlock a paint in the garage. The Driver's equipped paint
+should recolor the cab and fenders for the shared truck.
+
+For Studio persistence tests, enable **Game Settings -> Security -> Enable
+Studio Access to API Services**. When it is disabled, the HUD explicitly says
+`NOT SAVING`; published servers use DataStoreService normally. Studio has its
+own test store and cannot overwrite live balances. Stop and start a fresh
+Studio session after an unlock to verify the balance and paint return.
 
 ## Questions to ask afterwards
 
@@ -132,7 +179,7 @@ supporting role has failed regardless of how good the physics feel.
 
 Continue building on this direction only if, across at least four sessions:
 
-- The driver enjoys driving with no progression attached.
+- The driver enjoys the run before seeing its progression reward.
 - At least one non-driver role is chosen voluntarily.
 - Cause and effect are visible without the HUD.
 - Similar conditions produce different outcomes.

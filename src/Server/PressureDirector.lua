@@ -30,8 +30,14 @@ local WHEELS = { "FL", "FR", "RL", "RR" }
 	whole game.
 ]]
 local CORNER_WINDOWS = { { 0.06, 0.19 }, { 0.51, 0.60 }, { 0.72, 0.88 } }
-local DESCENT_WINDOW = { 0.22, 0.42 }
+-- Mechanical hits land after the crest, not as the truck tips over it.
+local DESCENT_WINDOW = { 0.30, 0.48 }
 local BRIDGE_WINDOW = { 0.56, 0.70 }
+-- After the scripted corner setup, refuse a random event for at least this long
+-- so it cannot stack on top of the blind right.
+local CORNER_SETUP_MIN_GAP = 22
+-- Late-run intervals shrink toward this fraction of the base range.
+local INTERVAL_PROGRESS_SCALE = 0.35
 
 -- Progress at which the scripted opener adds the second half of its setup,
 -- placed just short of the blind right-hander.
@@ -54,6 +60,11 @@ local function pick(rng: Random, range: NumberRange): number
 	return rng:NextNumber(range.Min, range.Max)
 end
 
+local function nextInterval(rng: Random, progress: number, intervalScale: number): number
+	local interval = pick(rng, LabConfig.PressureIntervalSeconds)
+	return interval * (1 - INTERVAL_PROGRESS_SCALE * math.clamp(progress, 0, 1)) * intervalScale
+end
+
 function PressureDirector.new(chassisRig, cargoLoad, onEvent)
 	return setmetatable({
 		chassisRig = chassisRig,
@@ -67,7 +78,14 @@ function PressureDirector.new(chassisRig, cargoLoad, onEvent)
 		lastCategory = "",
 		activeLabel = "none",
 		firedCornerSetup = false,
+		intervalScale = 1,
+		pressureScale = 1,
 	}, PressureDirector)
+end
+
+function PressureDirector:configure(difficulty)
+	self.intervalScale = math.clamp(difficulty and difficulty.intervalScale or 1, 0.5, 1.5)
+	self.pressureScale = math.clamp(difficulty and difficulty.pressureScale or 1, 0.5, 1.5)
 end
 
 function PressureDirector:_announce(label: string, detail: string)
@@ -82,6 +100,17 @@ end
 	outside of the corner that is coming, so the crew has to notice and cross.
 ]]
 function PressureDirector:_cargoPressure(progress: number)
+	local eventRoll = self.rng:NextNumber()
+	if eventRoll < 0.18 then
+		local chassis = self.chassisRig:getChassis()
+		local side = if self.rng:NextNumber() > 0.5 then 1 else -1
+		local direction = (chassis.CFrame.RightVector * side + chassis.CFrame.LookVector * 0.25).Unit
+		local velocityChange = pick(self.rng, LabConfig.GustAccel) * 0.3 * self.pressureScale
+		self.cargoLoad:applyJolt(direction * velocityChange)
+		self:_announce("Cargo jolt", if side > 0 then "right" else "left")
+		return true
+	end
+
 	local candidates = {}
 	for _, id in LabConfig.StrapOrder do
 		local strap = self.cargoLoad:getStrap(id)
@@ -91,6 +120,16 @@ function PressureDirector:_cargoPressure(progress: number)
 	end
 	if #candidates == 0 then
 		return false
+	end
+	if eventRoll < 0.36 and #candidates >= 2 then
+		local firstIndex = self.rng:NextInteger(1, #candidates)
+		local first = table.remove(candidates, firstIndex)
+		local second = candidates[self.rng:NextInteger(1, #candidates)]
+		local amount = pick(self.rng, LabConfig.StrapWeakenAmount) * 0.55 * self.pressureScale
+		self.cargoLoad:weakenStrap(first, amount)
+		self.cargoLoad:weakenStrap(second, amount)
+		self:_announce("Ratchet cascade", first .. "+" .. second)
+		return true
 	end
 
 	local chosen = candidates[self.rng:NextInteger(1, #candidates)]
@@ -111,7 +150,7 @@ function PressureDirector:_cargoPressure(progress: number)
 		end
 	end
 
-	local amount = pick(self.rng, LabConfig.StrapWeakenAmount)
+	local amount = pick(self.rng, LabConfig.StrapWeakenAmount) * self.pressureScale
 	self.cargoLoad:weakenStrap(chosen, amount)
 	self:_announce("Strap " .. chosen .. " slipping", chosen)
 	return true
@@ -128,10 +167,10 @@ function PressureDirector:_mechanicalPressure(progress: number)
 			-- On the descent the front carries the load, so hurt the front.
 			wheel = if self.rng:NextNumber() > 0.5 then "FL" else "FR"
 		end
-		self.chassisRig:damageSuspension(wheel, pick(self.rng, LabConfig.SuspensionDamageAmount))
+		self.chassisRig:damageSuspension(wheel, pick(self.rng, LabConfig.SuspensionDamageAmount) * self.pressureScale)
 		self:_announce("Suspension " .. wheel .. " sagging", wheel)
 	else
-		self.chassisRig:degradeSteering(pick(self.rng, LabConfig.SteeringDegradeAmount))
+		self.chassisRig:degradeSteering(pick(self.rng, LabConfig.SteeringDegradeAmount) * self.pressureScale)
 		self:_announce("Steering going vague", "steering")
 	end
 	return true
@@ -143,7 +182,7 @@ end
 ]]
 function PressureDirector:_environmentalPressure(progress: number)
 	local chassis = self.chassisRig:getChassis()
-	local magnitude = pick(self.rng, LabConfig.GustAccel)
+	local magnitude = pick(self.rng, LabConfig.GustAccel) * self.pressureScale
 	if inWindow(progress, BRIDGE_WINDOW) then
 		magnitude *= 1.35
 	end
@@ -213,13 +252,14 @@ function PressureDirector:step(dt: number, progress: number)
 	if not self.firedCornerSetup and progress >= CORNER_SETUP_PROGRESS then
 		self.firedCornerSetup = true
 		self:_cargoPressure(progress)
-		self.nextEventAt = self.elapsed + pick(self.rng, LabConfig.PressureIntervalSeconds)
+		self.nextEventAt = self.elapsed
+			+ math.max(nextInterval(self.rng, progress, self.intervalScale), CORNER_SETUP_MIN_GAP * self.intervalScale)
 		return
 	end
 
 	if self.elapsed >= self.nextEventAt then
 		self:_fire(progress)
-		self.nextEventAt = self.elapsed + pick(self.rng, LabConfig.PressureIntervalSeconds)
+		self.nextEventAt = self.elapsed + nextInterval(self.rng, progress, self.intervalScale)
 	end
 end
 
@@ -229,7 +269,7 @@ end
 
 function PressureDirector:reset()
 	self.elapsed = 0
-	self.nextEventAt = LabConfig.PressureFirstEventSeconds
+	self.nextEventAt = LabConfig.PressureFirstEventSeconds * self.intervalScale
 	self.gustRemaining = 0
 	self.gustAccel = Vector3.zero
 	self.lastCategory = ""

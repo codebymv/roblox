@@ -123,7 +123,7 @@ local function joinBay(player: Player, bayIndex: number?): boolean
 
 	local crew = if bayIndex then crews[bayIndex] else bestJoinableCrew()
 	if not crew then
-		toast(player, "No bay is open right now — watching instead.")
+		toast(player, "No bay is open right now. Watching instead.")
 		setSpectate(player, nil)
 		return false
 	end
@@ -260,7 +260,7 @@ local function updateBoard()
 		if rank > 3 then
 			break
 		end
-		table.insert(lines, string.format("  %d. %s — %d (%s)", rank, row.name, row.value, row.detail))
+		table.insert(lines, string.format("  %d. %s · %d (%s)", rank, row.name, row.value, row.detail))
 	end
 
 	table.insert(lines, "")
@@ -277,7 +277,7 @@ local function updateBoard()
 		if rank > 3 then
 			break
 		end
-		table.insert(lines, string.format("  %d. %s — %d cr (%s)", rank, row.name, row.value, row.detail))
+		table.insert(lines, string.format("  %d. %s · %d cr (%s)", rank, row.name, row.value, row.detail))
 	end
 
 	table.insert(lines, "")
@@ -286,7 +286,7 @@ local function updateBoard()
 		local descriptor = if status.memberCount == 0
 			then "open"
 			else string.format("%d crew · %s · leg %d", status.memberCount, status.phase, status.leg)
-		table.insert(lines, string.format("BAY %d — %s", status.index, descriptor))
+		table.insert(lines, string.format("BAY %d · %s", status.index, descriptor))
 	end
 
 	world.boardLabel.Text = table.concat(lines, "\n")
@@ -549,7 +549,7 @@ function DepotService.init()
 		end
 	end)
 
-	print(string.format("[CargoCatastrophe] Depot online — %d bays, event: %s", #crews, LiveOps.getActive().label))
+	print(string.format("[CargoCatastrophe] Depot online · %d bays, event: %s", #crews, LiveOps.getActive().label))
 end
 
 function DepotService.getCrewFor(player: Player): any?

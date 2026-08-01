@@ -14,7 +14,7 @@
 > adapt / skip framing is a good template if a second title reuses this spine.
 
 Cross-repo contracts adopted into Cargo Catastrophe as **Luau reimplementations**.  
-Rule: steal ownership rules, state machines, fail enums, HUD shapes — never port UE / Three.js / FlashCore engines.
+Rule: steal ownership rules, state machines, fail enums, HUD shapes · never port UE / Three.js / FlashCore engines.
 
 ## Standardized enums (Roblox)
 

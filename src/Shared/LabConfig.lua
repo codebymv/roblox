@@ -20,6 +20,21 @@ local LabConfig = {
 
 	RailHeight = 1.4,
 
+	-- Visual-only parts (massless, welded to chassis/cab).
+	BedDeckSize = Vector3.new(8.2, 0.22, 10.2),
+	BedDeckOffset = Vector3.new(0, 1.42, 2.4),
+	WindshieldSize = Vector3.new(7.2, 2.1, 0.28),
+	WindshieldOffset = Vector3.new(0, 0.55, -3.05),
+	WindshieldRakeDeg = 14,
+	HeadlightOffset = Vector3.new(2.75, -0.45, -3.15),
+	TaillightOffset = Vector3.new(2.6, 0.35, 8.05),
+	HubRadius = 0.62,
+	BumperSize = Vector3.new(8.6, 0.75, 0.55),
+	BumperOffset = Vector3.new(0, -0.15, -3.35),
+	MirrorArmOffset = Vector3.new(4.2, 1.55, -1.6),
+	StrapRatchetSize = Vector3.new(0.55, 0.42, 0.75),
+	StrapRopeThickness = 0.34,
+
 	-- --------------------------------------------------------------- wheels
 	-- Local mount points. Front wheels are at negative Z.
 	WheelOffsets = {
@@ -36,8 +51,9 @@ local LabConfig = {
 	SuspensionRestLength = 3.1,
 	-- Fraction of rest length compressed when the truck is parked and level.
 	SuspensionStaticCompression = 0.34,
-	-- 1.0 would be critically damped. Under one leaves a readable body roll.
-	SuspensionDampingRatio = 0.42,
+	-- 1.0 would be critically damped. This leaves readable body roll without
+	-- letting a reset or road seam ring through several oscillations.
+	SuspensionDampingRatio = 0.68,
 	-- Hard cap so a single frame can never launch the truck.
 	SuspensionMaxForceScale = 3.2,
 
@@ -52,6 +68,11 @@ local LabConfig = {
 	MaxReverseSpeed = 22,
 	-- Below this the drivetrain stops pushing back, or a parked truck jitters.
 	SpeedDeadzone = 0.6,
+	-- Gravity freely exceeds MaxForwardSpeed on grades because that cap only
+	-- stops throttle. Soft-cap engine-brakes toward this ceiling so steering
+	-- authority is not wiped out the moment a hill tips you over falloff.
+	DownhillSoftCap = 54,
+	DownhillBrakeAccel = 18,
 
 	-- ----------------------------------------------------------------- grip
 	-- Fraction of lateral slip velocity cancelled per second, per axle.
@@ -62,11 +83,11 @@ local LabConfig = {
 	-- Above this lateral force per wheel the tyre breaks traction.
 	GripLimitPerWheel = 2.1,
 
-	MaxSteerAngleDeg = 30,
+	MaxSteerAngleDeg = 28,
 	-- Steering authority falls off with speed or the truck flips on a tap.
-	SteerSpeedFalloff = 46,
-	MinSteerFactor = 0.28,
-	SteerRateDegPerSec = 150,
+	SteerSpeedFalloff = 52,
+	MinSteerFactor = 0.34,
+	SteerRateDegPerSec = 105,
 
 	-- Kills the slow spin a raycast vehicle accumulates with no real tyres.
 	YawDamping = 1.4,
@@ -144,7 +165,7 @@ local LabConfig = {
 		RL = CFrame.new(-5.9, 1.9, 5.75) * CFrame.Angles(0, math.rad(90), 0),
 		RR = CFrame.new(5.9, 1.9, 5.75) * CFrame.Angles(0, math.rad(-90), 0),
 	},
-	StationSeatSize = Vector3.new(2.4, 0.5, 2.4),
+	StationSeatSize = Vector3.new(2.5, 0.85, 2.5),
 	--[[
 		A character's own mass is negligible next to a truck, so the station
 		platform carries the crew member's braced weight instead. This is what
@@ -165,6 +186,15 @@ local LabConfig = {
 	ThrowLateralAccel = 52,
 	ThrowRecoverySeconds = 4,
 
+	-- ---------------------------------------------------------- SWAP gates
+	-- Fixed route fractions keep the handoffs learnable. A gate is ignored for
+	-- solo play; with 2-4 crew it rotates everyone through the occupied slots.
+	SwapGateProgress = { 0.3, 0.77 },
+	-- Start the personalized warning this far before the physical red signs.
+	SwapWarningProgress = 0.05,
+	-- Server-applied brake and throw immunity while seats and controls rotate.
+	SwapHandoffSeconds = 1.25,
+
 	-- ------------------------------------------------------------ pressure
 	-- The director perturbs state. It never assigns damage to a meter.
 	PressureFirstEventSeconds = 26,
@@ -181,17 +211,27 @@ local LabConfig = {
 	OpeningWeakHealth = 38,
 
 	-- ------------------------------------------------------------- session
-	-- The route is about two to three minutes of driving; this is a generous
-	-- cap so a crew that stops to make repairs is not punished by the clock.
-	RunTimeLimitSeconds = 330,
-	RestartDelaySeconds = 2.5,
+	-- Route is roughly two to three minutes of clean driving. The clock is
+	-- tight enough that a crew which parks to refit every strap will feel it,
+	-- but not so tight that a careful first run is doomed.
+	RunTimeLimitSeconds = 210,
+	-- Prep beat: long enough to switch roles, park at a station, and read the
+	-- opener toast before the truck rolls.
+	RestartDelaySeconds = 8,
 	ResultDisplaySeconds = 6,
+	-- First-time feedback needs a longer result beat than ordinary restarts.
+	FeedbackResultDisplaySeconds = 11,
 	-- Below this the truck is written off.
 	MinChassisIntegrity = 0,
 	MaxChassisIntegrity = 100,
-	ImpactDamageScale = 1.5,
-	-- Fall out of the world.
-	VoidY = -140,
+	ImpactDamageScale = 1.2,
+	-- Per-frame spike above the drivetrain budget before a hit registers.
+	ImpactThreshold = 85,
+	-- One lip-bump should not write off the truck in a single frame.
+	ImpactDamageCap = 22,
+	-- Bridge deck sits at Y = -136. Leave enough air under it that driving off
+	-- is a fall you watch, not an instant wreck.
+	VoidY = -200,
 }
 
 function LabConfig.surface(name: string?)

@@ -19,6 +19,7 @@
 
 local Net = require(script.Parent.Net)
 local LabConfig = require(script.Parent.LabConfig)
+local RoleKits = require(script.Parent.RoleKits)
 
 local LabRemotes = {}
 
@@ -30,6 +31,8 @@ export type DrivePayload = {
 
 export type MovePayload = { station: string }
 export type WorkPayload = { working: boolean }
+export type FeedbackPayload = { answer: "Yes" | "Maybe" | "No" }
+export type PaintPayload = { paintId: string }
 export type EmptyPayload = {}
 
 export type DevPayload = {
@@ -93,6 +96,20 @@ local validators: { [string]: (any) -> any } = {
 
 	[Net.Names.LabSwitchRole] = function(): EmptyPayload
 		return {}
+	end,
+
+	[Net.Names.LabFeedback] = function(payload: any): FeedbackPayload?
+		if payload ~= "Yes" and payload ~= "Maybe" and payload ~= "No" then
+			return nil
+		end
+		return { answer = payload }
+	end,
+
+	[Net.Names.LabPaint] = function(payload: any): PaintPayload?
+		if typeof(payload) ~= "string" or not RoleKits.getPaint(payload) then
+			return nil
+		end
+		return { paintId = payload }
 	end,
 
 	[Net.Names.LabDevCommand] = function(payload: any): DevPayload?

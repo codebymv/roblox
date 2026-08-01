@@ -70,7 +70,10 @@ function CargoRig:_build()
 	windshield.Material = Enum.Material.Glass
 	windshield.Transparency = 0.25
 
-	makePart("Bed", Vector3.new(8.5, 0.8, 9), body.CFrame * CFrame.new(0, 2.1, -3), Color3.fromRGB(28, 30, 34), model)
+	cab.Material = Enum.Material.SmoothPlastic
+
+	makePart("Bed", Vector3.new(8.5, 0.8, 9), body.CFrame * CFrame.new(0, 2.1, -3), Color3.fromRGB(28, 30, 34), model).Material =
+		Enum.Material.DiamondPlate
 
 	local crate = makePart(
 		"Cargo",
@@ -116,12 +119,13 @@ function CargoRig:_build()
 		for _, z in { -4.5, 4.5 } do
 			local wheel = makePart(
 				"Wheel",
-				Vector3.new(2.2, 2.2, 1.2),
-				body.CFrame * CFrame.new(x, -1.1, z) * CFrame.Angles(0, 0, math.rad(90)),
-				Color3.fromRGB(20, 20, 20),
+				Vector3.new(1.1, 2.2, 2.2),
+				body.CFrame * CFrame.new(x, -1.1, z),
+				Color3.fromRGB(22, 22, 24),
 				model
 			)
 			wheel.Shape = Enum.PartType.Cylinder
+			wheel.Material = Enum.Material.Rubber
 		end
 	end
 
