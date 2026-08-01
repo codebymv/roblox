@@ -224,6 +224,11 @@ local LabConfig = {
 	ResultDisplaySeconds = 6,
 	-- First-time feedback needs a longer result beat than ordinary restarts.
 	FeedbackResultDisplaySeconds = 11,
+	-- The result beat when a contract board is up. Six seconds is enough to
+	-- read an outcome but not to read two cards, discuss them, and vote. The
+	-- longest of the three applies, so the feedback ask never gets squeezed by
+	-- a board appearing on the same screen.
+	ContractVoteSeconds = 12,
 	-- Below this the truck is written off.
 	MinChassisIntegrity = 0,
 	MaxChassisIntegrity = 100,

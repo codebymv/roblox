@@ -151,8 +151,19 @@ end
 
 -- --------------------------------------------------------------- build ui
 
+type ContractCardUI = {
+	button: TextButton,
+	heading: TextLabel,
+	pressure: TextLabel,
+	cargo: TextLabel,
+	brief: TextLabel,
+	tally: TextLabel,
+}
+
 local gui, speedLabel, conditionLabel, readoutLabel, timeLabel, integrityLabel
 local objectiveLabel, hintLabel, toastLabel, resultFrame, resultTitle, resultDetail, cashLabel
+local contractFrame, contractTitle, contractFooter
+local contractCards: { [string]: ContractCardUI } = {}
 local resultQuestion, resultConstraint, feedbackRow
 local phaseBadge, countdownLabel
 local statusFrame, briefFrame, strapPanelFrame, driveFrame, garageFrame
@@ -247,6 +258,116 @@ local function showToast(text: string)
 		table.remove(toastQueue, 1)
 	end
 	drainToast()
+end
+
+--[[
+	The contract board.
+
+	Its own panel rather than a section inside the result frame, because that
+	frame positions its feedback prompt at fixed offsets against a height that
+	is recomputed per state. Growing it for a third state would have made four
+	magic numbers depend on each other; this just sits below it.
+
+	Each card is one button. There is no confirm step: the decision is small,
+	the window is short, and a vote can be changed until the timer runs out.
+]]
+local function buildContractCard(parent: Instance, name: string, order: number): ContractCardUI
+	local card = UIKit.button({
+		Name = name,
+		Size = UDim2.fromScale(0, 1),
+		Text = "",
+		LayoutOrder = order,
+		Parent = parent,
+	})
+	local flexItem = Instance.new("UIFlexItem")
+	flexItem.FlexMode = Enum.UIFlexMode.Fill
+	flexItem.GrowRatio = 1
+	flexItem.ShrinkRatio = 1
+	flexItem.Parent = card
+
+	local heading =
+		label(card, "Contract", UDim2.fromOffset(10, 8), UDim2.new(1, -20, 0, 18), "", 14, Enum.Font.GothamBold, true)
+	heading.TextXAlignment = Enum.TextXAlignment.Left
+
+	local pressure = label(
+		card,
+		"Pressure",
+		UDim2.fromOffset(10, 27),
+		UDim2.new(1, -20, 0, 15),
+		"",
+		12,
+		Enum.Font.GothamMedium,
+		true
+	)
+	pressure.TextXAlignment = Enum.TextXAlignment.Left
+
+	local cargo =
+		label(card, "Cargo", UDim2.fromOffset(10, 45), UDim2.new(1, -20, 0, 15), "", 12, Enum.Font.GothamMedium, true)
+	cargo.TextXAlignment = Enum.TextXAlignment.Left
+	cargo.TextColor3 = UIKit.Theme.Accent
+
+	local brief =
+		label(card, "Brief", UDim2.fromOffset(10, 63), UDim2.new(1, -20, 0, 32), "", 11, Enum.Font.Gotham, true)
+	brief.TextXAlignment = Enum.TextXAlignment.Left
+	brief.TextWrapped = true
+
+	local tally =
+		label(card, "Tally", UDim2.fromOffset(10, 97), UDim2.new(1, -20, 0, 16), "", 12, Enum.Font.GothamBold, true)
+	tally.TextXAlignment = Enum.TextXAlignment.Left
+
+	return { button = card, heading = heading, pressure = pressure, cargo = cargo, brief = brief, tally = tally }
+end
+
+local function buildContractBoard(parent: Instance)
+	contractFrame = panel(parent, "ContractBoard", UDim2.new(0.5, 0, 0.5, 150), UDim2.new(0.72, 0, 0, 172))
+	contractFrame.AnchorPoint = Vector2.new(0.5, 0)
+	contractFrame.BackgroundTransparency = 0.08
+	contractFrame.Visible = false
+
+	local constraint = Instance.new("UISizeConstraint")
+	constraint.MaxSize = Vector2.new(560, 172)
+	constraint.MinSize = Vector2.new(300, 172)
+	constraint.Parent = contractFrame
+
+	contractTitle = label(
+		contractFrame,
+		"Title",
+		UDim2.fromOffset(12, 8),
+		UDim2.new(1, -24, 0, 20),
+		"NEXT DELIVERY",
+		14,
+		Enum.Font.GothamBold,
+		true
+	)
+	contractTitle.TextXAlignment = Enum.TextXAlignment.Center
+	contractTitle.TextColor3 = UIKit.Theme.Accent
+
+	local row = UIKit.horizontalRow(contractFrame, "Cards", 118)
+	row.Position = UDim2.fromOffset(0, 30)
+
+	contractCards.Safe = buildContractCard(row, "Safe", 1)
+	contractCards.Risky = buildContractCard(row, "Risky", 2)
+	for choice, card in contractCards do
+		local vote = choice
+		card.button.Activated:Connect(function()
+			local snap = latest
+			if snap and snap.offer and snap.myRole and snap.myContractVote ~= vote then
+				LabRemotes.fireServer(Net.Names.LabContractVote, vote)
+			end
+		end)
+	end
+
+	contractFooter = label(
+		contractFrame,
+		"Footer",
+		UDim2.fromOffset(12, 150),
+		UDim2.new(1, -24, 0, 16),
+		"",
+		11,
+		Enum.Font.Gotham,
+		true
+	)
+	contractFooter.TextXAlignment = Enum.TextXAlignment.Center
 end
 
 local function buildStrapPanel(parent: Instance): Frame
@@ -744,6 +865,8 @@ local function build()
 		table.insert(feedbackButtons, element)
 	end
 
+	buildContractBoard(root)
+
 	strapPanelFrame = buildStrapPanel(root)
 	buildGarage(root)
 	buildControls(root)
@@ -766,6 +889,65 @@ local OUTCOME_DETAIL = {
 	CargoLost = "The load is somewhere back on the road.",
 	TimeExpired = "The clock beat you to the depot.",
 }
+
+--[[
+	Draw the board, or hide it.
+
+	A spectator sees the cards and the tally but cannot press either: they are
+	not going to be on the run this decides. The leading card is highlighted
+	rather than the one this player voted for, because the interesting state on
+	a four-player crew is where the crew is, not where you are.
+]]
+local function refreshContractBoard(snap: LabTypes.LabSnapshot)
+	local offer = snap.offer
+	UIKit.setVisible(contractFrame, offer ~= nil)
+	if not offer then
+		return
+	end
+
+	local canVote = snap.myRole ~= nil
+	UIKit.setText(
+		contractTitle,
+		string.format("RUN %d · CHOOSE THE CONTRACT · %ds", offer.runNumber, offer.secondsRemaining)
+	)
+
+	for choice, card in contractCards do
+		local view = if choice == "Risky" then offer.risky else offer.safe
+		UIKit.setText(card.heading, view.contractLabel)
+		UIKit.setText(card.pressure, string.format("%s · x%.2g PAY", view.difficultyLabel, view.rewardMultiplier))
+		UIKit.setText(card.cargo, view.cargoLabel)
+		UIKit.setText(card.brief, view.contractBrief)
+
+		local mine = snap.myContractVote == choice
+		UIKit.setText(
+			card.tally,
+			if view.votes == 0
+				then (if mine then "YOUR PICK" else "")
+				else string.format(
+					"%d VOTE%s%s",
+					view.votes,
+					if view.votes == 1 then "" else "S",
+					if mine then " · YOURS" else ""
+				)
+		)
+
+		setButtonLive(
+			card.button,
+			canVote and not mine,
+			if offer.leading == choice
+				then (if choice == "Risky" then UIKit.Theme.Danger else UIKit.Theme.Positive)
+				else UIKit.Theme.Button
+		)
+	end
+
+	UIKit.setText(
+		contractFooter,
+		if not canVote
+			then "Spectating. The crew decides this one."
+			elseif snap.myContractVote == nil then "No vote yet. A tie or an empty board takes the safe run."
+			else "Tap the other card to change your vote."
+	)
+end
 
 local function resultBody(snap: LabTypes.LabSnapshot): string
 	local lines: { string } = {}
@@ -1256,6 +1438,8 @@ refresh = function()
 			else UIKit.Theme.Button
 		setButtonLive(element, feedbackRequested and not feedbackPending, color)
 	end
+	refreshContractBoard(snap)
+
 	if showResult then
 		local headline = OUTCOME_HEADLINE[snap.outcome] or string.upper(snap.outcome or "")
 		UIKit.setText(resultTitle, headline)

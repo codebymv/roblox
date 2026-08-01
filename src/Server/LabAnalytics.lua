@@ -13,7 +13,9 @@ local AnalyticsService = game:GetService("AnalyticsService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
-local LabTypes = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("LabTypes"))
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local LabTypes = require(Shared:WaitForChild("LabTypes"))
+local RunVariants = require(Shared:WaitForChild("RunVariants"))
 
 type PlayerState = {
 	joinedAt: number,
@@ -218,6 +220,48 @@ function LabAnalytics:runFinished(outcome: string, crew: { Player }, summary: La
 			[Enum.AnalyticsCustomFieldKeys.CustomField02.Name] = "Outcome - " .. outcome,
 			[Enum.AnalyticsCustomFieldKeys.CustomField03.Name] = "Crew - " .. crewSize,
 		})
+	end
+end
+
+--[[
+	What the crew chose, and what they were choosing between.
+
+	The offered pair is recorded alongside the winner because a card that is
+	never taken is the interesting result: it means either the risk is priced
+	wrong or the crew cannot read it. Vote counts separate "we decided" from
+	"the timer decided for us", which are the same outcome and different
+	problems.
+]]
+function LabAnalytics:contractChosen(
+	crew: { Player },
+	choice: string,
+	safeVotes: number,
+	riskyVotes: number,
+	offer: RunVariants.ContractOffer
+)
+	local reporter = crew[1]
+	if not reporter then
+		return
+	end
+
+	local taken = if choice == "Risky" then offer.risky else offer.safe
+	local fields = {
+		[Enum.AnalyticsCustomFieldKeys.CustomField01.Name] = "Choice - " .. choice,
+		[Enum.AnalyticsCustomFieldKeys.CustomField02.Name] = "Card - "
+			.. taken.cargo.id
+			.. "/"
+			.. taken.contract.id
+			.. "/"
+			.. taken.difficulty.id,
+		[Enum.AnalyticsCustomFieldKeys.CustomField03.Name] = "Crew - " .. tostring(#crew),
+	}
+
+	self:_custom(reporter, "CargoContractChosen", 1, fields)
+	self:_custom(reporter, "CargoContractVotesSafe", safeVotes, fields)
+	self:_custom(reporter, "CargoContractVotesRisky", riskyVotes, fields)
+	-- No vote at all is the board failing to land, not a preference for safe.
+	if safeVotes + riskyVotes == 0 then
+		self:_custom(reporter, "CargoContractNoVote", 1, fields)
 	end
 end
 

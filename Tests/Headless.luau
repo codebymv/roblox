@@ -333,6 +333,71 @@ check("a wreck with no usable cause is still countable", function()
 	assert(not RunCauses.isWreckCause("collision"), "Only declared causes count")
 end)
 
+-- ------------------------------------------------------------ contract board
+
+check("the board always offers a real decision", function()
+	for run = 2, 9 do
+		local offer = RunVariants.offer(run, (run % 3) / 3, ((run + 1) % 3) / 3, (run % 2) / 2)
+		assert(offer.runNumber == run, "Offer forgot which run it is for")
+		assert(offer.safe.contract.id == "Standard", "The safe card asks for something extra")
+		assert(offer.safe.difficulty.id == "Normal", "The safe card is not the calm one")
+		assert(offer.risky.difficulty.id == "Catastrophe", "The risky card is not under pressure")
+		assert(offer.risky.contract.id ~= "Standard", "The risky card asks for nothing extra")
+		assert(
+			offer.safe.openingWeakStrap == offer.risky.openingWeakStrap,
+			"The weak strap is part of the run, not part of the choice"
+		)
+	end
+end)
+
+--[[
+	The gamble has to be worth taking. Failing the risky contract still pays its
+	difficulty bonus, so the risky card is never worse on arrival; the cost is
+	the chance of not arriving. If that stopped being true the board would be a
+	menu with one correct answer.
+]]
+check("the risky card pays more whether or not its contract lands", function()
+	local offer = RunVariants.offer(2, 0, 0, 0)
+	local safeMet = RunVariants.rewardMultiplier(offer.safe, true)
+	local riskyMet = RunVariants.rewardMultiplier(offer.risky, true)
+	local riskyMissed = RunVariants.rewardMultiplier(offer.risky, false)
+
+	assert(riskyMet > safeMet, "Completing the risky contract pays no better than the safe one")
+	assert(riskyMissed > safeMet, "Missing the risky contract pays worse than never taking it")
+	assert(riskyMet > riskyMissed, "The risky contract's own bonus does not reward completing it")
+end)
+
+check("a vote that does not resolve takes the safe card", function()
+	local Choice = RunVariants.Choice
+	local decided, safe, risky = RunVariants.tally({})
+	assert(decided == Choice.Safe and safe == 0 and risky == 0, "An empty board did not default to safe")
+
+	decided = RunVariants.tally({ [1] = Choice.Risky, [2] = Choice.Safe })
+	assert(decided == Choice.Safe, "A tie did not default to safe")
+
+	decided = RunVariants.tally({ [1] = Choice.Risky, [2] = Choice.Risky, [3] = Choice.Safe })
+	assert(decided == Choice.Risky, "A majority for risky was not honoured")
+
+	decided, safe, risky = RunVariants.tally({ [1] = Choice.Risky, [2] = "Nonsense" })
+	assert(decided == Choice.Risky and safe == 0 and risky == 1, "An unparsable vote was counted")
+end)
+
+check("only declared choices are accepted", function()
+	assert(RunVariants.isChoice(RunVariants.Choice.Safe), "Safe is not a choice")
+	assert(RunVariants.isChoice(RunVariants.Choice.Risky), "Risky is not a choice")
+	assert(not RunVariants.isChoice(nil), "nil is a choice")
+	assert(not RunVariants.isChoice("safe"), "Choices are case-sensitive identifiers")
+	assert(not RunVariants.isChoice(""), "The empty string is a choice")
+end)
+
+check("the chosen card is the one the crew voted for", function()
+	local offer = RunVariants.offer(3, 0.5, 0.9, 0.7)
+	assert(RunVariants.variantFor(offer, RunVariants.Choice.Risky) == offer.risky, "Risky vote took the safe card")
+	assert(RunVariants.variantFor(offer, RunVariants.Choice.Safe) == offer.safe, "Safe vote took the risky card")
+	assert(RunVariants.variantFor(offer, nil) == offer.safe, "A missing decision did not fall back to safe")
+	assert(RunVariants.variantFor(offer, "Nonsense") == offer.safe, "An unknown decision did not fall back to safe")
+end)
+
 check("respawns never attach to a wreck or result-phase truck", function()
 	assert(not LabRespawnPolicy.shouldAttach("Result", false, 0, -200), "Result truck accepted a respawn")
 	assert(not LabRespawnPolicy.shouldAttach("Run", true, 0, -200), "Wrecked truck accepted a respawn")

@@ -27,6 +27,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local DevConfig = require(Shared:WaitForChild("DevConfig"))
 local LabConfig = require(Shared:WaitForChild("LabConfig"))
 local LabRemotes = require(Shared:WaitForChild("LabRemotes"))
+local LabTypes = require(Shared:WaitForChild("LabTypes"))
 local Net = require(Shared:WaitForChild("Net"))
 local RunCauses = require(Shared:WaitForChild("RunCauses"))
 local RunVariants = require(Shared:WaitForChild("RunVariants"))
@@ -83,6 +84,12 @@ function LabSession.new(config: Config)
 		runVariant = RunVariants.select(1),
 		contractComplete = nil :: boolean?,
 		rewardMultiplier = 1,
+
+		-- The board, live only during a Result that has one. Votes are keyed by
+		-- UserId so a player who leaves mid-vote takes their vote with them.
+		contractOffer = nil :: RunVariants.ContractOffer?,
+		contractVotes = {} :: { [number]: string },
+		contractChoice = nil :: string?,
 		objective = "Waiting for a crew.",
 
 		roles = {},
@@ -325,6 +332,8 @@ function LabSession:_buildSharedSnapshot()
 		difficultyLabel = runVariant.difficulty.label,
 		contractComplete = self.contractComplete,
 		rewardMultiplier = self.rewardMultiplier,
+		-- myVote is per-player, so _applyPersonalFields fills it in.
+		offer = self:_offerView(),
 
 		objective = self.objective,
 		outcome = self.outcome,
@@ -347,6 +356,7 @@ function LabSession:_buildSharedSnapshot()
 		queuePosition = nil,
 		feedbackRequested = false,
 		feedbackSubmitted = false,
+		myContractVote = nil,
 		progressionReady = false,
 		progressionSaving = false,
 		credits = 0,
@@ -358,6 +368,42 @@ function LabSession:_buildSharedSnapshot()
 	}
 end
 
+--[[
+	The board as the client draws it. Nil unless a board is genuinely live, so
+	the HUD never has to reason about whether a stale offer still applies.
+
+	Only descriptive fields cross: the authoritative RunVariant stays here, and
+	the client's vote is a choice between two names rather than a payload the
+	server trusts.
+]]
+function LabSession:_offerView(): LabTypes.ContractOfferView?
+	local offer = self.contractOffer
+	if not offer or self.phase ~= "Result" then
+		return nil
+	end
+
+	local leading, safeVotes, riskyVotes = RunVariants.tally(self.contractVotes)
+	local function card(variant, votes: number): LabTypes.ContractCard
+		return {
+			cargoLabel = variant.cargo.label,
+			cargoDescription = variant.cargo.description,
+			contractLabel = variant.contract.label,
+			contractBrief = variant.contract.brief,
+			difficultyLabel = variant.difficulty.label,
+			rewardMultiplier = RunVariants.rewardMultiplier(variant, true),
+			votes = votes,
+		}
+	end
+
+	return {
+		runNumber = offer.runNumber,
+		safe = card(offer.safe, safeVotes),
+		risky = card(offer.risky, riskyVotes),
+		leading = leading,
+		secondsRemaining = math.max(0, math.ceil(self.restartSeconds)),
+	}
+end
+
 function LabSession:_applyPersonalFields(snapshot, player: Player)
 	local role = self.roles[player.UserId]
 	local slot = self.stations and self.stations:getSlot(player)
@@ -366,6 +412,9 @@ function LabSession:_applyPersonalFields(snapshot, player: Player)
 	snapshot.spectating = role == nil
 	snapshot.feedbackRequested = self.phase == "Result" and role ~= nil and self.analytics:shouldAskForFeedback(player)
 	snapshot.feedbackSubmitted = self.phase == "Result" and self.analytics:hasFeedback(player)
+	-- Spectators see the board and the running tally, but do not get a vote on
+	-- a run they are not going to be on.
+	snapshot.myContractVote = if role ~= nil then self.contractVotes[player.UserId] else nil
 	local progression = LabProgressionService.snapshot(player)
 	snapshot.progressionReady = progression.ready
 	snapshot.progressionSaving = progression.saving
@@ -719,12 +768,15 @@ end
 
 function LabSession:enterStaging()
 	local nextRunNumber = self.runIndex + 1
-	self.runVariant = RunVariants.select(
-		nextRunNumber,
-		self.variantRng:NextNumber(),
-		self.variantRng:NextNumber(),
-		self.variantRng:NextNumber()
-	)
+	-- A decided board wins. Without one — run one, or a restart that skipped
+	-- the result screen — fall back to the server roll this replaced.
+	self.runVariant = self:_resolveContractBoard()
+		or RunVariants.select(
+			nextRunNumber,
+			self.variantRng:NextNumber(),
+			self.variantRng:NextNumber(),
+			self.variantRng:NextNumber()
+		)
 	local variant = self.runVariant
 	self.stepFailed = false
 	self.phase = "Staging"
@@ -910,12 +962,83 @@ function LabSession:enterResult(result: string, saved: boolean)
 		end
 	end
 	self:_finishRun(result, saved, crew, RunCauses.bucket(result, self.outcomeCause))
-	self.resultDuration = if self.analytics:anyFeedbackNeeded(crew)
-		then LabConfig.FeedbackResultDisplaySeconds
-		else LabConfig.ResultDisplaySeconds
-	self.restartSeconds = self.resultDuration
+	self:_openContractBoard()
+
+	--[[
+		The longest applicable beat wins. A board and a first-time feedback ask
+		can land on the same result screen, and squeezing either one is worse
+		than holding the wreck on screen for a few more seconds.
+	]]
+	local duration = LabConfig.ResultDisplaySeconds
+	if self.analytics:anyFeedbackNeeded(crew) then
+		duration = math.max(duration, LabConfig.FeedbackResultDisplaySeconds)
+	end
+	if self.contractOffer then
+		duration = math.max(duration, LabConfig.ContractVoteSeconds)
+	end
+	self.resultDuration = duration
+	self.restartSeconds = duration
 
 	self.objective = "Run over."
+end
+
+--[[
+	Put two cards on the result screen for the run after this one.
+
+	Run one is the fixed onboarding contract, so the board first appears once a
+	player has driven the truck at least once and has something to base a
+	decision on. Votes are cleared here rather than when they are resolved, so a
+	vote can never carry from one board to the next.
+]]
+function LabSession:_openContractBoard()
+	table.clear(self.contractVotes)
+	self.contractOffer = nil
+	self.contractChoice = nil
+
+	if self.runIndex < 1 then
+		return
+	end
+
+	self.contractOffer = RunVariants.offer(
+		self.runIndex + 1,
+		self.variantRng:NextNumber(),
+		self.variantRng:NextNumber(),
+		self.variantRng:NextNumber()
+	)
+	self.telemetry:log(
+		"contract_offer",
+		string.format(
+			"%s/%s vs %s/%s",
+			self.contractOffer.safe.cargo.id,
+			self.contractOffer.safe.contract.id,
+			self.contractOffer.risky.cargo.id,
+			self.contractOffer.risky.contract.id
+		)
+	)
+end
+
+--[[
+	Close the board and hand the winning card to staging.
+
+	Called at the Result to Staging boundary, because staging is where the crate
+	is resized and the opener toast is written: a decision that landed any later
+	would be a decision about a truck that had already been built.
+]]
+function LabSession:_resolveContractBoard(): RunVariants.RunVariant?
+	local offer = self.contractOffer
+	if not offer then
+		return nil
+	end
+
+	local choice, safeVotes, riskyVotes = RunVariants.tally(self.contractVotes)
+	self.contractChoice = choice
+	self.contractOffer = nil
+	table.clear(self.contractVotes)
+
+	self.telemetry:log("contract_choice", string.format("%s (%d safe, %d risky)", choice, safeVotes, riskyVotes))
+	self.analytics:contractChosen(self:_crewPlayers(), choice, safeVotes, riskyVotes, offer)
+
+	return RunVariants.variantFor(offer, choice)
 end
 
 function LabSession:_evaluateDelivery()
@@ -1336,6 +1459,25 @@ function LabSession:_bindRemotes()
 		end
 	end))
 
+	--[[
+		A contract vote. Only crew vote, and only while a board is actually up:
+		a vote arriving after the board resolved would otherwise sit in the
+		table and be counted against the next run's offer.
+	]]
+	self:_track(LabRemotes.bindServer(Net.Names.LabContractVote, function(player: Player, vote)
+		if not self.actionLimiter:allow(player) then
+			return
+		end
+		if self.phase ~= "Result" or not self.contractOffer or not self.roles[player.UserId] then
+			return
+		end
+		if self.contractVotes[player.UserId] == vote.choice then
+			return
+		end
+		self.contractVotes[player.UserId] = vote.choice
+		self:_broadcastSnapshot()
+	end))
+
 	self:_track(LabRemotes.bindServer(Net.Names.LabPaint, function(player: Player, request)
 		if not self.actionLimiter:allow(player) or self.phase == "Run" or not self.roles[player.UserId] then
 			return
@@ -1447,6 +1589,8 @@ function LabSession:_onPlayerRemoving(player: Player)
 	self.stations:detach(player)
 	self.roles[player.UserId] = nil
 	self.driveInputs[player.UserId] = nil
+	-- A vote belongs to somebody who is going to drive the run it decides.
+	self.contractVotes[player.UserId] = nil
 
 	-- PlayerRemoving can fire before GetPlayers stops returning the departing
 	-- player. Defer promotion by one scheduler turn so _assignRoles cannot hand

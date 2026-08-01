@@ -54,6 +54,29 @@ export type RunSummary = {
 -- Direction of travel on the condition ladder, not a second meter.
 export type ConditionTrend = "Worsening" | "Recovering" | "Stable"
 
+-- One side of the contract board. Purely descriptive: the client renders it
+-- and sends back a choice, and never computes anything from it.
+export type ContractCard = {
+	cargoLabel: string,
+	cargoDescription: string,
+	contractLabel: string,
+	contractBrief: string,
+	difficultyLabel: string,
+	-- What this card pays if its contract is met, relative to a plain delivery.
+	rewardMultiplier: number,
+	votes: number,
+}
+
+export type ContractOfferView = {
+	runNumber: number,
+	safe: ContractCard,
+	risky: ContractCard,
+	-- Where the tally currently stands. A crew that never votes gets the safe
+	-- card, so this is never nil while the board is up.
+	leading: string,
+	secondsRemaining: number,
+}
+
 export type StrapSnapshot = {
 	id: StrapId,
 	health: number,
@@ -120,7 +143,7 @@ export type LabSnapshot = {
 	swapNextRole: LabRole?,
 	swapNextStation: StrapId?,
 
-	-- Server-selected replayability card for this delivery.
+	-- The card this delivery is running under.
 	cargoLabel: string,
 	cargoDescription: string,
 	contractLabel: string,
@@ -128,6 +151,16 @@ export type LabSnapshot = {
 	difficultyLabel: string,
 	contractComplete: boolean?,
 	rewardMultiplier: number,
+
+	--[[
+		The contract board, offered on the result screen once a run has been
+		completed. The server keeps the authoritative RunVariant for each side;
+		only what the client has to draw crosses the wire.
+
+		Absent whenever there is nothing to decide: during a run, and before the
+		fixed onboarding run has been played.
+	]]
+	offer: ContractOfferView?,
 
 	objective: string,
 	outcome: Outcome?,
@@ -140,6 +173,9 @@ export type LabSnapshot = {
 	-- session after they finish a run; no free text is collected.
 	feedbackRequested: boolean,
 	feedbackSubmitted: boolean,
+	-- This player's own contract vote, alongside the other personal fields
+	-- rather than inside `offer`, which is one table shared by every client.
+	myContractVote: string?,
 
 	-- Persistent public-build progression. Paint definitions themselves are
 	-- static in RoleKits; only ownership and the equipped choice cross the wire.

@@ -20,6 +20,7 @@
 local Net = require(script.Parent.Net)
 local LabConfig = require(script.Parent.LabConfig)
 local RoleKits = require(script.Parent.RoleKits)
+local RunVariants = require(script.Parent.RunVariants)
 
 local LabRemotes = {}
 
@@ -35,6 +36,7 @@ export type DrivePayload = {
 export type MovePayload = { station: string }
 export type WorkPayload = { working: boolean }
 export type FeedbackPayload = { answer: "Yes" | "Maybe" | "No" }
+export type ContractVotePayload = { choice: RunVariants.OfferChoice }
 export type PaintPayload = { paintId: string }
 export type EmptyPayload = {}
 
@@ -110,6 +112,17 @@ local validators: { [string]: (any) -> any } = {
 			return nil
 		end
 		return { answer = payload }
+	end,
+
+	--[[
+		The contract vote. Validated against RunVariants rather than against a
+		literal pair here, so the board and the wire agree by construction.
+	]]
+	[Net.Names.LabContractVote] = function(payload: any): ContractVotePayload?
+		if typeof(payload) ~= "string" or not RunVariants.isChoice(payload) then
+			return nil
+		end
+		return { choice = payload }
 	end,
 
 	[Net.Names.LabPaint] = function(payload: any): PaintPayload?
