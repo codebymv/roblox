@@ -58,6 +58,15 @@ local function defaultProfile(): Types.ProfileData
 		manifestJournal = {},
 		lastDailyDay = 0,
 		grantedReceipts = {},
+		labRecords = {
+			deliveries = 0,
+			bestConditionPct = 0,
+			bestTimeSeconds = 0,
+			bestPayout = 0,
+			deliveryStreak = 0,
+			bestDeliveryStreak = 0,
+		},
+		awardedBadges = {},
 	}
 end
 
@@ -170,6 +179,8 @@ local function saveEntry(userId: number, entry: Entry): boolean
 	snapshot.unlockedPaints = table.clone(entry.data.unlockedPaints)
 	snapshot.manifestJournal = table.clone(entry.data.manifestJournal)
 	snapshot.grantedReceipts = table.clone(entry.data.grantedReceipts)
+	snapshot.labRecords = table.clone(entry.data.labRecords)
+	snapshot.awardedBadges = table.clone(entry.data.awardedBadges)
 	entry.saving = true
 	local ok, err = pcall(function()
 		dataStore:UpdateAsync(keyFor(userId), function()

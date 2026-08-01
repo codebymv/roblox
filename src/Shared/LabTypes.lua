@@ -54,6 +54,21 @@ export type RunSummary = {
 -- Direction of travel on the condition ladder, not a second meter.
 export type ConditionTrend = "Worsening" | "Recovering" | "Stable"
 
+--[[
+	Personal bests. The progression catalogue is five paint colours and runs out
+	in an hour or two; a record is a reason to run again that costs no content
+	and works at any population, which a global board does not.
+]]
+export type PersonalRecords = {
+	deliveries: number,
+	bestConditionPct: number,
+	-- Seconds. Zero means never delivered, so the client must not format it.
+	bestTimeSeconds: number,
+	bestPayout: number,
+	deliveryStreak: number,
+	bestDeliveryStreak: number,
+}
+
 -- One side of the contract board. Purely descriptive: the client renders it
 -- and sends back a choice, and never computes anything from it.
 export type ContractCard = {
@@ -176,6 +191,11 @@ export type LabSnapshot = {
 	-- This player's own contract vote, alongside the other personal fields
 	-- rather than inside `offer`, which is one table shared by every client.
 	myContractVote: string?,
+
+	-- Personal records, and which of them the run just finished beat. Both are
+	-- per player, so both live with the other personal fields.
+	records: PersonalRecords?,
+	recordsBeaten: { string }?,
 
 	-- Persistent public-build progression. Paint definitions themselves are
 	-- static in RoleKits; only ownership and the equipped choice cross the wire.

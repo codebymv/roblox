@@ -68,6 +68,7 @@ local LabConfig = loadShared("LabConfig")
 local MatchConfig = loadShared("MatchConfig")
 local BuildProfiles = loadShared("BuildProfiles")
 local AudioIds = loadShared("AudioIds")
+local Achievements = loadShared("Achievements")
 local AudioMix = loadShared("AudioMix")
 local Commerce = loadShared("Commerce")
 local ImpactTiers = loadShared("ImpactTiers")
@@ -423,6 +424,97 @@ check("a wreck with no usable cause is still countable", function()
 	)
 	assert(not RunCauses.isWreckCause(nil), "nil is not a wreck cause")
 	assert(not RunCauses.isWreckCause("collision"), "Only declared causes count")
+end)
+
+-- -------------------------------------------------------- records and badges
+
+--[[
+	Faster is better and zero means never delivered. A plain math.min would make
+	the unset sentinel an unbeatable record forever, which is the bug this
+	module exists in its own file to prevent.
+]]
+check("a first delivery sets the time record without claiming to beat one", function()
+	local records = Achievements.defaultRecords()
+	local beaten = Achievements.applyRun(records, "Delivered", 88, 140, 135)
+
+	assert(records.bestTimeSeconds == 140, "The first delivery did not set a time")
+	assert(records.deliveries == 1, "The first delivery was not counted")
+	assert(records.deliveryStreak == 1, "The first delivery did not start a streak")
+	for _, key in beaten do
+		assert(key ~= "bestTimeSeconds", "The first delivery claimed to beat a time that did not exist")
+		assert(key ~= "bestDeliveryStreak", "A streak of one was announced as a record")
+	end
+end)
+
+check("a faster delivery beats the record and a slower one does not", function()
+	local records = Achievements.defaultRecords()
+	Achievements.applyRun(records, "Delivered", 50, 140, 100)
+
+	local beaten = Achievements.applyRun(records, "Delivered", 50, 120, 100)
+	assert(records.bestTimeSeconds == 120, "A faster delivery did not take the record")
+	assert(table.find(beaten, "bestTimeSeconds"), "Beating the time was not reported")
+
+	beaten = Achievements.applyRun(records, "Delivered", 50, 200, 100)
+	assert(records.bestTimeSeconds == 120, "A slower delivery overwrote the record")
+	assert(not table.find(beaten, "bestTimeSeconds"), "A slower delivery was reported as a record")
+end)
+
+check("a run that never arrived records nothing and breaks the streak", function()
+	local records = Achievements.defaultRecords()
+	Achievements.applyRun(records, "Delivered", 90, 150, 130)
+	Achievements.applyRun(records, "Delivered", 90, 150, 130)
+	assert(records.deliveryStreak == 2, "Two deliveries did not build a streak")
+
+	local beaten = Achievements.applyRun(records, "TruckWrecked", 0, 40, 15)
+	assert(#beaten == 0, "A wreck claimed a record")
+	assert(records.deliveryStreak == 0, "A wreck did not break the streak")
+	assert(records.bestDeliveryStreak == 2, "A wreck erased the best streak")
+	assert(records.deliveries == 2, "A wreck counted as a delivery")
+	assert(records.bestTimeSeconds == 150, "A wreck overwrote the time record")
+end)
+
+check("condition and payout records only move upward", function()
+	local records = Achievements.defaultRecords()
+	Achievements.applyRun(records, "Delivered", 70, 100, 200)
+	Achievements.applyRun(records, "Delivered", 40, 100, 90)
+	assert(records.bestConditionPct == 70, "A worse condition took the record")
+	assert(records.bestPayout == 200, "A smaller payout took the record")
+
+	local beaten = Achievements.applyRun(records, "Delivered", 100, 100, 400)
+	assert(table.find(beaten, "bestConditionPct"), "A better condition was not reported")
+	assert(table.find(beaten, "bestPayout"), "A bigger payout was not reported")
+	-- Out-of-range measurements are clamped rather than trusted.
+	Achievements.applyRun(records, "Delivered", 500, 100, 10)
+	assert(records.bestConditionPct == 100, "Condition was not clamped to 100")
+end)
+
+check("badges are earned by what happened, and fail closed until configured", function()
+	local earned = Achievements.earnedBy("Delivered", 100, 2, true)
+	assert(table.find(earned, "FirstDelivery"), "A delivery earned no first-delivery badge")
+	assert(table.find(earned, "SpotlessDelivery"), "A perfect delivery earned no badge")
+	assert(table.find(earned, "SavedIt"), "Delivering after a break earned no badge")
+	assert(table.find(earned, "TookTheRisk"), "Completing the risky card earned no badge")
+
+	assert(#Achievements.earnedBy("TruckWrecked", 100, 0, true) == 0, "A wreck earned a badge")
+	assert(
+		not table.find(Achievements.earnedBy("Delivered", 99, 0, false), "SpotlessDelivery"),
+		"99% counted as spotless"
+	)
+
+	for _, key in earned do
+		assert(Achievements.badge(key), "Earned a badge key that is not in the list: " .. key)
+	end
+	for _, badge in Achievements.Badges do
+		assert(badge.label ~= "" and badge.description ~= "", badge.key .. " is missing its copy")
+	end
+	assert(#Achievements.awardable() == 0, "A badge is configured; update this check when ids are real")
+end)
+
+check("every record the result screen can announce has words", function()
+	local records = Achievements.defaultRecords()
+	for key in records do
+		assert(Achievements.RecordLabel[key], "Record " .. key .. " has no label for the result screen")
+	end
 end)
 
 -- ------------------------------------------------------------------ commerce

@@ -105,6 +105,18 @@ export type ProfileData = {
 	-- than once for the same sale, so this is what makes a grant idempotent.
 	-- Bounded by Commerce.MaxReceiptHistory.
 	grantedReceipts: { string },
+	-- Fun-test personal records. Deliberately separate from the Depot streak
+	-- fields above, which count convoy legs and mean something else.
+	labRecords: {
+		deliveries: number,
+		bestConditionPct: number,
+		bestTimeSeconds: number,
+		bestPayout: number,
+		deliveryStreak: number,
+		bestDeliveryStreak: number,
+	},
+	-- Badge keys already awarded, so a repeat run does not re-query Roblox.
+	awardedBadges: { [string]: boolean },
 }
 
 export type CrewSnapshot = {

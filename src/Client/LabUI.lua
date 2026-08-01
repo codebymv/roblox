@@ -10,6 +10,7 @@
 
 local ContextActionService = game:GetService("ContextActionService")
 local Players = game:GetService("Players")
+local SocialService = game:GetService("SocialService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -22,6 +23,7 @@ local LabRemotes = require(Shared:WaitForChild("LabRemotes"))
 local LabTypes = require(Shared:WaitForChild("LabTypes"))
 local Net = require(Shared:WaitForChild("Net"))
 local PresentationMath = require(Shared:WaitForChild("PresentationMath"))
+local Achievements = require(Shared:WaitForChild("Achievements"))
 local RoleKits = require(Shared:WaitForChild("RoleKits"))
 local RunCauses = require(Shared:WaitForChild("RunCauses"))
 
@@ -179,6 +181,8 @@ type ContractCardUI = {
 local gui, speedLabel, conditionLabel, readoutLabel, timeLabel, integrityLabel
 local objectiveLabel, hintLabel, toastLabel, resultFrame, resultTitle, resultDetail, cashLabel
 local contractFrame, contractTitle, contractFooter
+local inviteFrame, inviteButton
+local canInvite = false
 local contractCards: { [string]: ContractCardUI } = {}
 local resultQuestion, resultConstraint, feedbackRow
 local phaseBadge, countdownLabel
@@ -384,6 +388,41 @@ local function buildContractBoard(parent: Instance)
 		true
 	)
 	contractFooter.TextXAlignment = Enum.TextXAlignment.Center
+end
+
+--[[
+	Invite.
+
+	The co-op premise is the game's clearest identity and intentional co-play is
+	a published recommendation signal, but a solo arrival currently has no way
+	to turn into a crew. This is the whole social layer for now: one button, on
+	the screen where a player has just found out whether they liked the run.
+
+	CanSendGameInviteAsync yields and can fail, so it is asked once and cached.
+	A false answer hides the button rather than showing one that does nothing.
+]]
+local function buildInvite(parent: Instance)
+	inviteFrame = panel(parent, "Invite", UDim2.new(0, 12, 1, -12), UDim2.fromOffset(196, 46))
+	inviteFrame.AnchorPoint = Vector2.new(0, 1)
+	inviteFrame.Visible = false
+
+	inviteButton =
+		button(inviteFrame, "InviteButton", UDim2.fromOffset(8, 6), UDim2.new(1, -16, 0, 34), "INVITE A CREW")
+	inviteButton.Activated:Connect(function()
+		if not canInvite then
+			return
+		end
+		pcall(function()
+			SocialService:PromptGameInvite(Players.LocalPlayer)
+		end)
+	end)
+
+	task.spawn(function()
+		local ok, result = pcall(function()
+			return SocialService:CanSendGameInviteAsync(Players.LocalPlayer)
+		end)
+		canInvite = ok and result == true
+	end)
 end
 
 local function buildStrapPanel(parent: Instance): Frame
@@ -882,6 +921,7 @@ local function build()
 	end
 
 	buildContractBoard(root)
+	buildInvite(root)
 
 	strapPanelFrame = buildStrapPanel(root)
 	buildGarage(root)
@@ -993,6 +1033,18 @@ local function resultBody(snap: LabTypes.LabSnapshot): string
 	if snap.rewardEarned > 0 then
 		table.insert(lines, string.format("+%d CARGO CASH · BALANCE %d", snap.rewardEarned, snap.credits))
 	end
+
+	--[[
+		Records, named while the run that beat them is still on screen. Only the
+		first is shown: a run that beats three at once is usually the first
+		delivery, and listing all of them buries the one that means something.
+	]]
+	local beaten = snap.recordsBeaten
+	if beaten and #beaten > 0 then
+		local recordName = Achievements.RecordLabel[beaten[1]] or "Record"
+		table.insert(lines, string.upper("NEW BEST · " .. recordName))
+	end
+
 	table.insert(lines, string.format("Restarting in %ds · Press R to go now", snap.restartSeconds))
 	return table.concat(lines, "\n")
 end
@@ -1410,6 +1462,9 @@ refresh = function()
 	UIKit.setVisible(briefFrame, not compactContract)
 	UIKit.setVisible(strapPanelFrame, not compactContract)
 	UIKit.setVisible(controlsFrame, not compactContract)
+	-- Offered between runs, once there is a verdict to share. Hidden on short
+	-- screens with a board up, where it would sit under the decision stack.
+	UIKit.setVisible(inviteFrame, canInvite and not spectating and (isResult or isPrep) and not compactContract)
 	-- The contract decision is the between-run interaction. Do not make it
 	-- compete with paint browsing for either attention or screen space.
 	local showGarage = (isPrep or (isResult and snap.offer == nil)) and not spectating

@@ -33,6 +33,7 @@ local RunCauses = require(Shared:WaitForChild("RunCauses"))
 local RunVariants = require(Shared:WaitForChild("RunVariants"))
 
 local CargoLoad = require(script.Parent.CargoLoad)
+local AchievementService = require(script.Parent.AchievementService)
 local CommerceService = require(script.Parent.CommerceService)
 local LabAnalytics = require(script.Parent.LabAnalytics)
 local LabProgressionService = require(script.Parent.LabProgressionService)
@@ -96,6 +97,8 @@ function LabSession.new(config: Config)
 		roles = {},
 		driveInputs = {},
 		lastRewards = {},
+		-- Record keys each player beat on the last finished run, by UserId.
+		recordsBeaten = {},
 
 		driveLimiter = RateLimiter.new(25, 40),
 		actionLimiter = RateLimiter.new(8, 12),
@@ -361,6 +364,8 @@ function LabSession:_buildSharedSnapshot()
 		feedbackRequested = false,
 		feedbackSubmitted = false,
 		myContractVote = nil,
+		records = nil,
+		recordsBeaten = nil,
 		progressionReady = false,
 		progressionSaving = false,
 		credits = 0,
@@ -419,6 +424,8 @@ function LabSession:_applyPersonalFields(snapshot, player: Player)
 	-- Spectators see the board and the running tally, but do not get a vote on
 	-- a run they are not going to be on.
 	snapshot.myContractVote = if role ~= nil then self.contractVotes[player.UserId] else nil
+	snapshot.records = AchievementService.records(player)
+	snapshot.recordsBeaten = if self.phase == "Result" then self.recordsBeaten[player.UserId] else nil
 	local progression = LabProgressionService.snapshot(player)
 	snapshot.progressionReady = progression.ready
 	snapshot.progressionSaving = progression.saving
@@ -934,6 +941,28 @@ function LabSession:_finishRun(outcome: string, saved: boolean, crew: { Player }
 		endCause = endCause,
 	})
 	self.analytics:runFinished(outcome, crew, summary)
+
+	--[[
+		Records last, because they need the summary and the payout that the
+		reward loop above has already written. `recordsBeaten` is per player and
+		is read straight back out on the result screen, while the run that beat
+		it is still on the truck.
+	]]
+	table.clear(self.recordsBeaten)
+	local riskyContract = self.contractChoice == RunVariants.Choice.Risky
+	for _, player in crew do
+		local beaten = AchievementService.applyRun(player, {
+			outcome = outcome,
+			conditionPct = if summary then summary.cargoReadout else 0,
+			durationSeconds = if summary then summary.duration else 0,
+			payout = self.lastRewards[player.UserId] or 0,
+			strapBreaks = if summary then summary.strapBreaks else 0,
+			riskyContract = riskyContract,
+		})
+		if #beaten > 0 then
+			self.recordsBeaten[player.UserId] = beaten
+		end
+	end
 end
 
 function LabSession:enterResult(result: string, saved: boolean)
