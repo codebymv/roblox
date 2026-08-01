@@ -39,6 +39,7 @@ local REMOTE_NAMES = {
 	LabSwitchRole = "LabSwitchRole",
 	LabFeedback = "LabFeedback",
 	LabContractVote = "LabContractVote",
+	LabPurchase = "LabPurchase",
 	LabPaint = "LabPaint",
 	LabDevCommand = "LabDevCommand",
 }

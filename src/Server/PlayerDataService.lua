@@ -57,6 +57,7 @@ local function defaultProfile(): Types.ProfileData
 		equippedPaint = "Factory",
 		manifestJournal = {},
 		lastDailyDay = 0,
+		grantedReceipts = {},
 	}
 end
 
@@ -168,6 +169,7 @@ local function saveEntry(userId: number, entry: Entry): boolean
 	snapshot.equippedKits = table.clone(entry.data.equippedKits)
 	snapshot.unlockedPaints = table.clone(entry.data.unlockedPaints)
 	snapshot.manifestJournal = table.clone(entry.data.manifestJournal)
+	snapshot.grantedReceipts = table.clone(entry.data.grantedReceipts)
 	entry.saving = true
 	local ok, err = pcall(function()
 		dataStore:UpdateAsync(keyFor(userId), function()
@@ -227,11 +229,20 @@ function PlayerDataService.isVolatile(player: Player): boolean
 	return entry == nil or not entry.loaded or entry.volatile
 end
 
-function PlayerDataService.flush(player: Player)
+--[[
+	Save now, and say whether it worked.
+
+	The result matters to exactly one caller so far and it matters a great deal:
+	CommerceService may not confirm a receipt to Roblox until the grant is
+	durable, or a save failure quietly turns into a purchase the player paid for
+	and no longer owns after logout.
+]]
+function PlayerDataService.flush(player: Player): boolean
 	local entry = entries[player.UserId]
-	if entry then
-		saveEntry(player.UserId, entry)
+	if not entry then
+		return false
 	end
+	return saveEntry(player.UserId, entry)
 end
 
 function PlayerDataService.init()

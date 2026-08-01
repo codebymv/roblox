@@ -101,6 +101,10 @@ export type ProfileData = {
 	equippedPaint: string,
 	manifestJournal: { [string]: number },
 	lastDailyDay: number,
+	-- Purchase ids already granted, oldest first. ProcessReceipt can fire more
+	-- than once for the same sale, so this is what makes a grant idempotent.
+	-- Bounded by Commerce.MaxReceiptHistory.
+	grantedReceipts: { string },
 }
 
 export type CrewSnapshot = {

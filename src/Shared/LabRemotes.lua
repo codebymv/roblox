@@ -19,6 +19,7 @@
 
 local Net = require(script.Parent.Net)
 local LabConfig = require(script.Parent.LabConfig)
+local Commerce = require(script.Parent.Commerce)
 local RoleKits = require(script.Parent.RoleKits)
 local RunVariants = require(script.Parent.RunVariants)
 
@@ -37,6 +38,7 @@ export type MovePayload = { station: string }
 export type WorkPayload = { working: boolean }
 export type FeedbackPayload = { answer: "Yes" | "Maybe" | "No" }
 export type ContractVotePayload = { choice: RunVariants.OfferChoice }
+export type PurchasePayload = { key: string }
 export type PaintPayload = { paintId: string }
 export type EmptyPayload = {}
 
@@ -123,6 +125,23 @@ local validators: { [string]: (any) -> any } = {
 			return nil
 		end
 		return { choice = payload }
+	end,
+
+	--[[
+		A purchase intent names a catalogue key, never an asset id. A client that
+		could send an id could prompt for any product on the platform, including
+		one belonging to somebody else's experience. Unconfigured entries are
+		rejected here too, so nothing can be prompted before it is real.
+	]]
+	[Net.Names.LabPurchase] = function(payload: any): PurchasePayload?
+		if typeof(payload) ~= "string" then
+			return nil
+		end
+		local product = Commerce.byKey(payload)
+		if not product or not Commerce.isConfigured(product) then
+			return nil
+		end
+		return { key = payload }
 	end,
 
 	[Net.Names.LabPaint] = function(payload: any): PaintPayload?

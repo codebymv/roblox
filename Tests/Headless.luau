@@ -69,6 +69,7 @@ local MatchConfig = loadShared("MatchConfig")
 local BuildProfiles = loadShared("BuildProfiles")
 local AudioIds = loadShared("AudioIds")
 local AudioMix = loadShared("AudioMix")
+local Commerce = loadShared("Commerce")
 local ImpactTiers = loadShared("ImpactTiers")
 local VfxSpec = loadShared("VfxSpec")
 local PresentationMath = loadShared("PresentationMath")
@@ -422,6 +423,97 @@ check("a wreck with no usable cause is still countable", function()
 	)
 	assert(not RunCauses.isWreckCause(nil), "nil is not a wreck cause")
 	assert(not RunCauses.isWreckCause("collision"), "Only declared causes count")
+end)
+
+-- ------------------------------------------------------------------ commerce
+
+--[[
+	The line the design draws: paint changes a colour, and nothing sold may
+	change how the truck behaves. This is the check that fails if a grant kind
+	for grip, strap strength or timing windows ever appears.
+]]
+check("nothing on sale grants an advantage", function()
+	for _, product in Commerce.Catalog do
+		assert(
+			Commerce.CosmeticGrants[product.grant.kind],
+			product.key .. " sells a grant kind that is not cosmetic: " .. tostring(product.grant.kind)
+		)
+	end
+	assert(not Commerce.CosmeticGrants.Grip, "Grip became sellable")
+	assert(not Commerce.CosmeticGrants.StrapStrength, "Strap strength became sellable")
+end)
+
+--[[
+	Shipping the pipeline ahead of the catalogue only works if an unconfigured
+	product is inert. A placeholder id of zero must never be offered, matched or
+	prompted, and with every id currently zero, id lookup must not collapse them
+	all onto whichever entry happens to be first.
+]]
+check("an unconfigured product is completely inert", function()
+	for _, product in Commerce.Catalog do
+		if not Commerce.isConfigured(product) then
+			assert(Commerce.byAssetId(product.assetId, product.kind) == nil, product.key .. " matched on a zero id")
+		end
+	end
+	assert(Commerce.byAssetId(0, "Product") == nil, "A zero asset id resolved to a product")
+	assert(Commerce.byAssetId(nil, "Product") == nil, "A missing asset id resolved to a product")
+	assert(Commerce.byAssetId(-5, "Pass") == nil, "A negative asset id resolved to a product")
+
+	for _, product in Commerce.purchasable() do
+		assert(Commerce.isConfigured(product), "purchasable() offered an unconfigured product")
+	end
+end)
+
+check("the catalogue is internally consistent", function()
+	local keys = {}
+	for _, product in Commerce.Catalog do
+		assert(product.key ~= "", "A product has no key")
+		assert(not keys[product.key], "Duplicate product key: " .. product.key)
+		keys[product.key] = true
+		assert(product.kind == "Product" or product.kind == "Pass", product.key .. " has an unknown kind")
+		assert(product.label ~= "" and product.description ~= "", product.key .. " is missing storefront copy")
+		assert(Commerce.byKey(product.key) == product, product.key .. " is not findable by its own key")
+		if product.grant.kind == "Credits" then
+			assert((product.grant.amount or 0) > 0, product.key .. " grants no credits")
+		end
+	end
+	assert(Commerce.byKey(nil) == nil, "A missing key resolved to a product")
+	assert(Commerce.byKey("NotAProduct") == nil, "An unknown key resolved to a product")
+end)
+
+--[[
+	ProcessReceipt fires more than once for the same sale, and on a different
+	server if the first never confirmed. Recognising a repeat is the whole
+	defence against granting twice for one payment.
+]]
+check("a repeated receipt is recognised, not granted twice", function()
+	local history = {}
+	assert(Commerce.appendReceipt(history, "purchase-1"), "A new receipt was treated as a repeat")
+	assert(not Commerce.appendReceipt(history, "purchase-1"), "A repeated receipt was treated as new")
+	assert(#history == 1, "A repeated receipt was recorded twice")
+	assert(Commerce.hasReceipt(history, "purchase-1"), "A granted receipt was forgotten")
+	assert(not Commerce.hasReceipt(history, "purchase-2"), "An ungranted receipt was reported as granted")
+
+	assert(Commerce.appendReceipt(history, "purchase-2"), "A second distinct receipt was rejected")
+	assert(#history == 2, "A distinct receipt was not recorded")
+end)
+
+--[[
+	The history lives inside a DataStore value with a size limit, so it cannot
+	grow without end. Dropping the oldest is safe: Roblox stops retrying a
+	receipt long before the same player buys another sixty-four things.
+]]
+check("receipt history is bounded and drops the oldest first", function()
+	local history = {}
+	for index = 1, Commerce.MaxReceiptHistory + 10 do
+		Commerce.appendReceipt(history, "purchase-" .. tostring(index))
+	end
+	assert(#history == Commerce.MaxReceiptHistory, "Receipt history grew past its bound")
+	assert(not Commerce.hasReceipt(history, "purchase-1"), "The oldest receipt was not the one dropped")
+	assert(
+		Commerce.hasReceipt(history, "purchase-" .. tostring(Commerce.MaxReceiptHistory + 10)),
+		"The newest receipt was dropped"
+	)
 end)
 
 -- ------------------------------------------------------------ contract board

@@ -3,6 +3,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local DevConfig = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("DevConfig"))
+local CommerceService = require(script.Parent.CommerceService)
 local PlayerDataService = require(script.Parent.PlayerDataService)
 
 if DevConfig.isRelease() then
@@ -13,6 +14,11 @@ end
 -- Both builds now have progression. Initialise profiles before either mode
 -- starts assigning players so rewards and cosmetics never race the first run.
 PlayerDataService.init()
+
+-- Before either mode builds anything. A receipt that arrives before
+-- ProcessReceipt is bound gets retried, which the player experiences as a
+-- purchase that did nothing for a while.
+CommerceService.init()
 
 --[[
 	Mode split is intentional dual-stack risk: FunTest (LabSession) and Depot

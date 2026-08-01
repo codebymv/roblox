@@ -33,6 +33,7 @@ local RunCauses = require(Shared:WaitForChild("RunCauses"))
 local RunVariants = require(Shared:WaitForChild("RunVariants"))
 
 local CargoLoad = require(script.Parent.CargoLoad)
+local CommerceService = require(script.Parent.CommerceService)
 local LabAnalytics = require(script.Parent.LabAnalytics)
 local LabProgressionService = require(script.Parent.LabProgressionService)
 local LabTelemetry = require(script.Parent.LabTelemetry)
@@ -126,6 +127,9 @@ function LabSession.new(config: Config)
 
 	self.telemetry = LabTelemetry.new()
 	self.analytics = LabAnalytics.new()
+	-- Commerce binds its receipt callback at boot, before any session exists;
+	-- the funnel events belong to whichever session is live.
+	CommerceService.attachAnalytics(self.analytics)
 	self:_buildRig()
 
 	return self
@@ -1477,6 +1481,18 @@ function LabSession:_bindRemotes()
 		end
 		self.contractVotes[player.UserId] = vote.choice
 		self:_broadcastSnapshot()
+	end))
+
+	--[[
+		A purchase intent. The validator has already rejected unknown and
+		unconfigured keys, so this only has to rate limit and refuse spectators.
+		The prompt itself is raised server-side by CommerceService.
+	]]
+	self:_track(LabRemotes.bindServer(Net.Names.LabPurchase, function(player: Player, request)
+		if not self.actionLimiter:allow(player) or not self.roles[player.UserId] then
+			return
+		end
+		CommerceService.prompt(player, request.key)
 	end))
 
 	self:_track(LabRemotes.bindServer(Net.Names.LabPaint, function(player: Player, request)

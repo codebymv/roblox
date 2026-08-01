@@ -277,6 +277,28 @@ function LabAnalytics:contractChosen(
 	end
 end
 
+--[[
+	The purchase funnel, such as it is.
+
+	Two events rather than one because the gap between them is the number worth
+	having: prompts that never become grants are a pricing or presentation
+	problem, and a grant with no prompt before it means something is granting
+	outside the flow.
+]]
+function LabAnalytics:purchasePrompted(player: Player, product)
+	self:_custom(player, "CargoPurchasePrompted", 1, {
+		[Enum.AnalyticsCustomFieldKeys.CustomField01.Name] = "Product - " .. product.key,
+		[Enum.AnalyticsCustomFieldKeys.CustomField02.Name] = "Kind - " .. product.kind,
+	})
+end
+
+function LabAnalytics:purchaseGranted(player: Player, product)
+	self:_custom(player, "CargoPurchaseGranted", 1, {
+		[Enum.AnalyticsCustomFieldKeys.CustomField01.Name] = "Product - " .. product.key,
+		[Enum.AnalyticsCustomFieldKeys.CustomField02.Name] = "Kind - " .. product.kind,
+	})
+end
+
 function LabAnalytics:shouldAskForFeedback(player: Player): boolean
 	local state = self.players[player.UserId]
 	return state ~= nil and state.runsFinished >= 1 and state.feedback == nil
