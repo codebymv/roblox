@@ -43,6 +43,10 @@ local ENVIRONMENT = {
 	Vector3 = roblox.Vector3,
 	CFrame = roblox.CFrame,
 	NumberRange = roblox.NumberRange,
+	-- VfxSpec describes particle colour. NumberSequence and ColorSequence are
+	-- deliberately absent: those are built in LabVfx from the scalars here, so
+	-- the spec stays loadable without the engine.
+	Color3 = roblox.Color3,
 }
 
 -- The environment above belongs to the loaded modules; this file needs its own
@@ -65,6 +69,8 @@ local MatchConfig = loadShared("MatchConfig")
 local BuildProfiles = loadShared("BuildProfiles")
 local AudioIds = loadShared("AudioIds")
 local AudioMix = loadShared("AudioMix")
+local ImpactTiers = loadShared("ImpactTiers")
+local VfxSpec = loadShared("VfxSpec")
 local PresentationMath = loadShared("PresentationMath")
 local CrewRotation = loadShared("CrewRotation")
 local LabProgression = loadShared("LabProgression")
@@ -195,6 +201,91 @@ check("music steps back for the run it is scoring", function()
 		"Music is not quieter during the run than during staging"
 	)
 	assert(AudioMix.musicPhaseVolume("Nonsense") == AudioMix.MusicPhaseVolume.Staging, "Unknown phase lost its default")
+end)
+
+-- ------------------------------------------------------------- impact tiers
+
+check("damage tiers are ordered and have a dead zone", function()
+	assert(ImpactTiers.cargo(0) == nil, "A run bleeding fractions of a point fired an impact")
+	assert(ImpactTiers.cargo(ImpactTiers.Minimum - 0.01) == nil, "The dead zone does not hold")
+	assert(ImpactTiers.cargo(ImpactTiers.Minimum) == "Light", "The smallest real hit is not Light")
+	assert(ImpactTiers.cargo(ImpactTiers.CargoMedium) == "Medium", "The medium threshold is not inclusive")
+	assert(ImpactTiers.cargo(ImpactTiers.CargoHeavy) == "Heavy", "The heavy threshold is not inclusive")
+	assert(ImpactTiers.chassis(ImpactTiers.ChassisMedium) == "Medium", "Chassis medium is not inclusive")
+	assert(ImpactTiers.chassis(ImpactTiers.ChassisHeavy) == "Heavy", "Chassis heavy is not inclusive")
+	assert(ImpactTiers.CargoMedium < ImpactTiers.CargoHeavy, "Cargo thresholds are not increasing")
+	assert(ImpactTiers.ChassisMedium < ImpactTiers.ChassisHeavy, "Chassis thresholds are not increasing")
+end)
+
+--[[
+	The whole reason the thresholds moved into a shared module: a heavy hit must
+	not sound heavy and look light. Every tier needs both halves, and both must
+	climb together.
+]]
+check("every damage tier has a sound and a particle burst", function()
+	for _, tier in ImpactTiers.Order do
+		assert(AudioMix.EventVolume["CargoImpact" .. tier], "No cargo impact sound for tier " .. tier)
+		assert(AudioMix.EventVolume["TruckCollision" .. tier], "No truck collision sound for tier " .. tier)
+		assert(VfxSpec.CargoImpact[tier], "No cargo impact particles for tier " .. tier)
+		assert(VfxSpec.TruckCollision[tier], "No truck collision particles for tier " .. tier)
+	end
+
+	for index = 2, #ImpactTiers.Order do
+		local quieter, louder = ImpactTiers.Order[index - 1], ImpactTiers.Order[index]
+		assert(
+			VfxSpec.CargoImpact[quieter].count < VfxSpec.CargoImpact[louder].count,
+			louder .. " cargo impact throws no more debris than " .. quieter
+		)
+		assert(
+			VfxSpec.TruckCollision[quieter].count < VfxSpec.TruckCollision[louder].count,
+			louder .. " collision throws no more debris than " .. quieter
+		)
+		assert(
+			AudioMix.eventVolume("CargoImpact" .. quieter) < AudioMix.eventVolume("CargoImpact" .. louder),
+			"Cargo impact audio and particles disagree about severity"
+		)
+	end
+end)
+
+check("every surface a wheel can touch has a spray", function()
+	for name in LabConfig.Surfaces do
+		assert(VfxSpec.WheelSpray[name], "No wheel spray defined for surface " .. name)
+	end
+	-- Asphalt is the quiet default; leaving it should be visible before the
+	-- handling tells you.
+	assert(
+		VfxSpec.WheelSpray.Road.rate < VfxSpec.WheelSpray.Shoulder.rate,
+		"Leaving the road looks the same as staying"
+	)
+	assert(VfxSpec.WheelSpray.Road.rate < VfxSpec.WheelSpray.Grass.rate, "Grass does not spray more than asphalt")
+	assert(VfxSpec.wheelSpray("Nonsense") == VfxSpec.WheelSpray.Road, "An unknown surface lost its fallback")
+	assert(VfxSpec.wheelSpray(nil) == VfxSpec.WheelSpray.Road, "A missing surface lost its fallback")
+end)
+
+check("particle specs are physically sane", function()
+	local function validate(name: string, spec)
+		assert(spec.lifetime.Min > 0, name .. " has particles that never live")
+		assert(spec.speed.Min >= 0, name .. " emits at negative speed")
+		assert(spec.sizeStart > 0 and spec.sizeEnd > 0, name .. " has a zero-sized particle")
+		assert(spec.transparencyStart >= 0 and spec.transparencyStart < 1, name .. " starts invisible")
+		assert(spec.spreadDegrees >= 0 and spec.spreadDegrees <= 180, name .. " has an impossible spread")
+	end
+
+	for _, name in { "StrapSnap", "StrapRefit", "Rollover", "TyreSmoke", "CargoScrape", "StrapStress" } do
+		validate(name, VfxSpec[name])
+	end
+	for _, group in { "CargoImpact", "TruckCollision", "WheelSpray" } do
+		for tier, spec in VfxSpec[group] do
+			validate(group .. "." .. tier, spec)
+		end
+	end
+
+	-- A snapping strap is the clip moment; it should out-throw a refit.
+	assert(VfxSpec.StrapSnap.count > VfxSpec.StrapRefit.count, "Refitting a strap is more dramatic than breaking one")
+	assert(
+		VfxSpec.StrapStressFloor > 0 and VfxSpec.StrapStressFloor < 1,
+		"Stress shimmer would show constantly or never"
+	)
 end)
 
 check("first-session feedback has enough time to answer", function()
@@ -369,17 +460,32 @@ end)
 
 check("a vote that does not resolve takes the safe card", function()
 	local Choice = RunVariants.Choice
-	local decided, safe, risky = RunVariants.tally({})
+	local decided, safe, risky = RunVariants.tally({}, 4)
 	assert(decided == Choice.Safe and safe == 0 and risky == 0, "An empty board did not default to safe")
 
-	decided = RunVariants.tally({ [1] = Choice.Risky, [2] = Choice.Safe })
+	decided = RunVariants.tally({ [1] = Choice.Risky, [2] = Choice.Safe }, 2)
 	assert(decided == Choice.Safe, "A tie did not default to safe")
 
-	decided = RunVariants.tally({ [1] = Choice.Risky, [2] = Choice.Risky, [3] = Choice.Safe })
+	decided = RunVariants.tally({ [1] = Choice.Risky, [2] = Choice.Risky, [3] = Choice.Safe }, 3)
 	assert(decided == Choice.Risky, "A majority for risky was not honoured")
 
-	decided, safe, risky = RunVariants.tally({ [1] = Choice.Risky, [2] = "Nonsense" })
+	decided, safe, risky = RunVariants.tally({ [1] = Choice.Risky, [2] = "Nonsense" }, 1)
 	assert(decided == Choice.Risky and safe == 0 and risky == 1, "An unparsable vote was counted")
+end)
+
+check("abstentions cannot force the crew into the risky card", function()
+	local Choice = RunVariants.Choice
+	local decided = RunVariants.tally({ [1] = Choice.Risky }, 4)
+	assert(decided == Choice.Safe, "One voter forced three abstaining crew members into Risky")
+
+	decided = RunVariants.tally({ [1] = Choice.Risky, [2] = Choice.Risky, [3] = Choice.Safe }, 4)
+	assert(decided == Choice.Safe, "Half the crew was treated as a strict majority")
+
+	decided = RunVariants.tally({ [1] = Choice.Risky, [2] = Choice.Risky, [3] = Choice.Risky, [4] = Choice.Safe }, 4)
+	assert(decided == Choice.Risky, "Three of four crew members could not choose Risky")
+
+	decided = RunVariants.tally({ [1] = Choice.Risky }, 1)
+	assert(decided == Choice.Risky, "A solo player could not choose Risky")
 end)
 
 check("only declared choices are accepted", function()

@@ -248,10 +248,12 @@ function RunVariants.variantFor(offer: ContractOffer, choice: string?): RunVaria
 end
 
 --[[
-	Majority wins; anything else takes the safe card. Votes are whatever the
-	session has collected, keyed however it likes, so this stays a pure count.
+	A strict crew majority is required for Risky; anything else takes Safe.
+	Abstentions are deliberately not counted as Safe votes because analytics
+	needs to distinguish a calm preference from a board nobody engaged with,
+	but they still occupy seats Risky must win over.
 ]]
-function RunVariants.tally(votes: { [any]: string }): (OfferChoice, number, number)
+function RunVariants.tally(votes: { [any]: string }, eligibleCrew: number): (OfferChoice, number, number)
 	local safe, risky = 0, 0
 	for _, choice in votes do
 		if choice == RunVariants.Choice.Risky then
@@ -261,7 +263,8 @@ function RunVariants.tally(votes: { [any]: string }): (OfferChoice, number, numb
 		end
 	end
 
-	if risky > safe then
+	local eligible = math.max(0, math.floor(eligibleCrew))
+	if risky > eligible / 2 then
 		return RunVariants.Choice.Risky, safe, risky
 	end
 	return DEFAULT_CHOICE, safe, risky

@@ -25,6 +25,7 @@ local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local AudioIds = require(Shared:WaitForChild("AudioIds"))
 local AudioMix = require(Shared:WaitForChild("AudioMix"))
+local ImpactTiers = require(Shared:WaitForChild("ImpactTiers"))
 local LabRemotes = require(Shared:WaitForChild("LabRemotes"))
 local LabTypes = require(Shared:WaitForChild("LabTypes"))
 local Net = require(Shared:WaitForChild("Net"))
@@ -229,23 +230,17 @@ function LabSFX.mount()
 			end
 
 			if snap.phase == "Run" then
-				local cargoLoss = previous.cargoReadout - snap.cargoReadout
-				if cargoLoss >= 1 and os.clock() - lastCargoDamageAt >= DAMAGE_COOLDOWN then
-					local key = if cargoLoss >= 8
-						then "CargoImpactHeavy"
-						elseif cargoLoss >= 3 then "CargoImpactMedium"
-						else "CargoImpactLight"
-					play(key, "cargo")
+				-- Tiers come from ImpactTiers so the particle layer cannot
+				-- disagree with the sound about how hard something hit.
+				local cargoTier = ImpactTiers.cargo(previous.cargoReadout - snap.cargoReadout)
+				if cargoTier and os.clock() - lastCargoDamageAt >= DAMAGE_COOLDOWN then
+					play("CargoImpact" .. cargoTier, "cargo")
 					lastCargoDamageAt = os.clock()
 				end
 
-				local chassisLoss = previous.chassisIntegrity - snap.chassisIntegrity
-				if chassisLoss >= 1 and os.clock() - lastChassisDamageAt >= DAMAGE_COOLDOWN then
-					local key = if chassisLoss >= 10
-						then "TruckCollisionHeavy"
-						elseif chassisLoss >= 4 then "TruckCollisionMedium"
-						else "TruckCollisionLight"
-					play(key, "truck")
+				local chassisTier = ImpactTiers.chassis(previous.chassisIntegrity - snap.chassisIntegrity)
+				if chassisTier and os.clock() - lastChassisDamageAt >= DAMAGE_COOLDOWN then
+					play("TruckCollision" .. chassisTier, "truck")
 					lastChassisDamageAt = os.clock()
 				end
 			end

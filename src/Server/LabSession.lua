@@ -382,7 +382,7 @@ function LabSession:_offerView(): LabTypes.ContractOfferView?
 		return nil
 	end
 
-	local leading, safeVotes, riskyVotes = RunVariants.tally(self.contractVotes)
+	local leading, safeVotes, riskyVotes = RunVariants.tally(self.contractVotes, self:_activeCrewCount())
 	local function card(variant, votes: number): LabTypes.ContractCard
 		return {
 			cargoLabel = variant.cargo.label,
@@ -1030,13 +1030,14 @@ function LabSession:_resolveContractBoard(): RunVariants.RunVariant?
 		return nil
 	end
 
-	local choice, safeVotes, riskyVotes = RunVariants.tally(self.contractVotes)
+	local crew = self:_crewPlayers()
+	local choice, safeVotes, riskyVotes = RunVariants.tally(self.contractVotes, #crew)
 	self.contractChoice = choice
 	self.contractOffer = nil
 	table.clear(self.contractVotes)
 
 	self.telemetry:log("contract_choice", string.format("%s (%d safe, %d risky)", choice, safeVotes, riskyVotes))
-	self.analytics:contractChosen(self:_crewPlayers(), choice, safeVotes, riskyVotes, offer)
+	self.analytics:contractChosen(crew, choice, safeVotes, riskyVotes, offer)
 
 	return RunVariants.variantFor(offer, choice)
 end

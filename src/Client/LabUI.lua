@@ -59,6 +59,22 @@ local INTEGRITY_WARN_BELOW = 85
 local INTEGRITY_CRIT_BELOW = 35
 local STICK_DEADZONE = 0.15
 local TOUCH_MIN = 44
+
+--[[
+	Result panel rows when a contract board shares a short screen.
+
+	DetailHeight is sized for the longest wreck explanation RunCauses can
+	produce, wrapped at the panel's narrowest permitted width, rather than for
+	the shortest one. The generic fallback is the long case.
+]]
+local COMPACT_RESULT = {
+	TitleY = 4,
+	TitleHeight = 30,
+	DetailHeight = 40,
+	QuestionHeight = 18,
+	Gap = 2,
+	Padding = 6,
+}
 local TOAST_HOLD = 3.2
 local PRESENTATION_RATE = 14
 local PRESENTATION_INTERVAL = 1 / 30
@@ -166,7 +182,7 @@ local contractFrame, contractTitle, contractFooter
 local contractCards: { [string]: ContractCardUI } = {}
 local resultQuestion, resultConstraint, feedbackRow
 local phaseBadge, countdownLabel
-local statusFrame, briefFrame, strapPanelFrame, driveFrame, garageFrame
+local statusFrame, briefFrame, strapPanelFrame, controlsFrame, driveFrame, garageFrame
 local garagePaintName, garageHint, garagePrevious, garageAction, garageNext
 local controlsTitle, stationRowFrame, actionRowFrame, runLockLabel
 local strapRows: { [string]: any } = {}
@@ -869,7 +885,7 @@ local function build()
 
 	strapPanelFrame = buildStrapPanel(root)
 	buildGarage(root)
-	buildControls(root)
+	controlsFrame = buildControls(root)
 	driveFrame = buildTouchDrive(root)
 end
 
@@ -898,12 +914,20 @@ local OUTCOME_DETAIL = {
 	rather than the one this player voted for, because the interesting state on
 	a four-player crew is where the crew is, not where you are.
 ]]
-local function refreshContractBoard(snap: LabTypes.LabSnapshot)
+local function refreshContractBoard(snap: LabTypes.LabSnapshot, compact: boolean, topOffset: number?)
 	local offer = snap.offer
 	UIKit.setVisible(contractFrame, offer ~= nil)
 	if not offer then
 		return
 	end
+
+	UIKit.set(contractFrame, "AnchorPoint", Vector2.new(0.5, 0))
+	UIKit.set(
+		contractFrame,
+		"Position",
+		if compact then UDim2.new(0.5, 0, 0, topOffset or 0) else UDim2.new(0.5, 0, 0.5, 150)
+	)
+	UIKit.setSize(contractFrame, UDim2.new(if compact then 0.92 else 0.72, 0, 0, 172))
 
 	local canVote = snap.myRole ~= nil
 	UIKit.setText(
@@ -1372,9 +1396,23 @@ refresh = function()
 
 	setDimOverlay(stationRowFrame, isResult, "Run finished")
 
-	local showGarage = (isPrep or isResult) and not spectating
 	local camera = Workspace.CurrentCamera
 	local narrow = camera ~= nil and camera.ViewportSize.X < 760
+	local viewportHeight = if safeRoot and safeRoot.AbsoluteSize.Y > 0
+		then safeRoot.AbsoluteSize.Y
+		elseif camera then camera.ViewportSize.Y
+		else 720
+	local shortViewport = viewportHeight < 700
+	local compactContract = showResult and snap.offer ~= nil and shortViewport
+	-- On short screens these corner panels would sit underneath the centered
+	-- result/decision stack. Restore them as soon as the board closes.
+	UIKit.setVisible(statusFrame, not compactContract)
+	UIKit.setVisible(briefFrame, not compactContract)
+	UIKit.setVisible(strapPanelFrame, not compactContract)
+	UIKit.setVisible(controlsFrame, not compactContract)
+	-- The contract decision is the between-run interaction. Do not make it
+	-- compete with paint browsing for either attention or screen space.
+	local showGarage = (isPrep or (isResult and snap.offer == nil)) and not spectating
 	UIKit.set(garageFrame, "AnchorPoint", if narrow then Vector2.new(0.5, 0) else Vector2.new(1, 0))
 	UIKit.set(
 		garageFrame,
@@ -1416,13 +1454,68 @@ refresh = function()
 		end
 	end
 
-	UIKit.setVisible(resultFrame, showResult)
 	local feedbackRequested = showResult and snap.feedbackRequested
 	local feedbackSubmitted = showResult and snap.feedbackSubmitted
-	local resultHeight = if feedbackRequested then 242 elseif feedbackSubmitted then 198 else 168
-	UIKit.setSize(resultFrame, UDim2.new(0.7, 0, 0, resultHeight))
+
+	--[[
+		Compact rows stack: each one starts where the previous ends, so a height
+		change is one number rather than four offsets that have to agree.
+	]]
+	local detailY = COMPACT_RESULT.TitleY + COMPACT_RESULT.TitleHeight
+	local questionY = detailY + COMPACT_RESULT.DetailHeight + COMPACT_RESULT.Gap
+	local feedbackY = questionY + COMPACT_RESULT.QuestionHeight + COMPACT_RESULT.Gap
+	local compactHeight = if feedbackRequested
+		then feedbackY + TOUCH_MIN + COMPACT_RESULT.Padding
+		elseif feedbackSubmitted then questionY + COMPACT_RESULT.QuestionHeight + COMPACT_RESULT.Padding
+		else detailY + COMPACT_RESULT.DetailHeight + COMPACT_RESULT.Padding
+
+	local resultHeight = if compactContract
+		then compactHeight
+		else if feedbackRequested then 242 elseif feedbackSubmitted then 198 else 168
+	local compactTop = math.max(4, math.floor((viewportHeight - (resultHeight + 8 + 172)) / 2))
+
+	UIKit.setVisible(resultFrame, showResult)
+	UIKit.set(resultFrame, "AnchorPoint", if compactContract then Vector2.new(0.5, 0) else Vector2.new(0.5, 0.5))
+	UIKit.set(
+		resultFrame,
+		"Position",
+		if compactContract then UDim2.new(0.5, 0, 0, compactTop) else UDim2.fromScale(0.5, 0.5)
+	)
+	UIKit.setSize(resultFrame, UDim2.new(if compactContract then 0.9 else 0.7, 0, 0, resultHeight))
 	resultConstraint.MaxSize = Vector2.new(520, resultHeight)
 	resultConstraint.MinSize = Vector2.new(280, resultHeight)
+
+	UIKit.set(resultTitle, "Position", if compactContract then UDim2.fromOffset(12, 4) else UDim2.fromOffset(16, 14))
+	UIKit.setSize(resultTitle, if compactContract then UDim2.new(1, -24, 0, 30) else UDim2.new(1, -32, 0, 44))
+	UIKit.set(resultTitle, "TextSize", if compactContract then 20 else 26)
+	--[[
+		The explanation survives compact mode. It is the only place a player is
+		told what went wrong, RunCauses guarantees it always says something, and
+		dropping it on small screens would spend that guarantee on exactly the
+		players most likely to be seeing their first wreck.
+	]]
+	UIKit.setVisible(resultDetail, showResult)
+	UIKit.set(
+		resultDetail,
+		"Position",
+		if compactContract then UDim2.fromOffset(12, detailY) else UDim2.fromOffset(16, 62)
+	)
+	UIKit.setSize(
+		resultDetail,
+		if compactContract then UDim2.new(1, -24, 0, COMPACT_RESULT.DetailHeight) else UDim2.new(1, -32, 0, 88)
+	)
+	UIKit.set(resultDetail, "TextSize", if compactContract then 11 else 15)
+	UIKit.set(
+		resultQuestion,
+		"Position",
+		if compactContract then UDim2.fromOffset(12, questionY) else UDim2.fromOffset(12, 156)
+	)
+	UIKit.set(resultQuestion, "TextSize", if compactContract then 12 else 14)
+	UIKit.set(
+		feedbackRow,
+		"Position",
+		if compactContract then UDim2.fromOffset(0, feedbackY) else UDim2.fromOffset(0, 186)
+	)
 	UIKit.setVisible(resultQuestion, feedbackRequested or feedbackSubmitted)
 	UIKit.setVisible(feedbackRow, feedbackRequested)
 	if feedbackRequested or feedbackSubmitted then
@@ -1438,7 +1531,7 @@ refresh = function()
 			else UIKit.Theme.Button
 		setButtonLive(element, feedbackRequested and not feedbackPending, color)
 	end
-	refreshContractBoard(snap)
+	refreshContractBoard(snap, compactContract, compactTop + resultHeight + 8)
 
 	if showResult then
 		local headline = OUTCOME_HEADLINE[snap.outcome] or string.upper(snap.outcome or "")

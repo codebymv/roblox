@@ -244,19 +244,31 @@ function LabAnalytics:contractChosen(
 		return
 	end
 
-	local taken = if choice == "Risky" then offer.risky else offer.safe
+	--[[
+		One dimension per field. Crew size rides as the event value instead of
+		being packed in beside the choice: packed, every breakdown on "was the
+		risky card taken" splits into one bucket per crew size and stops
+		answering the question it was added for.
+	]]
 	local fields = {
 		[Enum.AnalyticsCustomFieldKeys.CustomField01.Name] = "Choice - " .. choice,
-		[Enum.AnalyticsCustomFieldKeys.CustomField02.Name] = "Card - "
-			.. taken.cargo.id
+		[Enum.AnalyticsCustomFieldKeys.CustomField02.Name] = "Safe - "
+			.. offer.safe.cargo.id
 			.. "/"
-			.. taken.contract.id
+			.. offer.safe.contract.id
 			.. "/"
-			.. taken.difficulty.id,
-		[Enum.AnalyticsCustomFieldKeys.CustomField03.Name] = "Crew - " .. tostring(#crew),
+			.. offer.safe.difficulty.id,
+		[Enum.AnalyticsCustomFieldKeys.CustomField03.Name] = "Risky - "
+			.. offer.risky.cargo.id
+			.. "/"
+			.. offer.risky.contract.id
+			.. "/"
+			.. offer.risky.difficulty.id,
 	}
 
-	self:_custom(reporter, "CargoContractChosen", 1, fields)
+	-- Count answers "how many boards resolved this way", sum answers "how many
+	-- players it decided for". Both are worth having and neither needs a field.
+	self:_custom(reporter, "CargoContractChosen", math.max(1, #crew), fields)
 	self:_custom(reporter, "CargoContractVotesSafe", safeVotes, fields)
 	self:_custom(reporter, "CargoContractVotesRisky", riskyVotes, fields)
 	-- No vote at all is the board failing to land, not a preference for safe.
