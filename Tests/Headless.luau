@@ -65,7 +65,6 @@ local function loadShared(name: string)
 end
 
 local LabConfig = loadShared("LabConfig")
-local MatchConfig = loadShared("MatchConfig")
 local BuildProfiles = loadShared("BuildProfiles")
 local AudioIds = loadShared("AudioIds")
 local Achievements = loadShared("Achievements")
@@ -1042,13 +1041,6 @@ check("set refuses a path that does not exist", function()
 end)
 
 -- --------------------------------------------------------------- leg ladder
-
-check("legs get shorter and harder as the convoy pushes", function()
-	assert(MatchConfig.legDuration(1) > MatchConfig.legDuration(4), "Legs should shorten")
-	assert(MatchConfig.legDuration(50) == MatchConfig.LegMinDurationSeconds, "Duration should clamp at the floor")
-	assert(MatchConfig.legPressure(5) > MatchConfig.legPressure(1), "Pressure should rise with leg number")
-	assert(MatchConfig.legPressure(500) <= MatchConfig.LegMaxPressure, "Pressure should clamp at the ceiling")
-end)
 
 -- --------------------------------------------------------------------- done
 

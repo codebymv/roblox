@@ -5,16 +5,14 @@ local RunService = game:GetService("RunService")
 local BuildProfiles = require(script.Parent.BuildProfiles)
 
 --[[
-	The single switch that decides which game boots.
+	Which tooling is live, and whether this is a published server.
 
-	FunTest is the physics-first public build. It bypasses the old depot, role
-	kits, live-ops and leg ladder, but now retains player profiles, run rewards
-	and cosmetic truck paints so the validated interaction can grow a meta loop.
-
-	Set Mode to "Depot" to get the full meta build back.
+	There used to be a Mode switch here as well, choosing between the depot
+	prototype and the physics-first build. The depot build has been deleted, so
+	there is one game and the switch was only a way to boot a version of it that
+	no longer exists.
 ]]
 
-export type Mode = "FunTest" | "Depot"
 export type BuildProfile = BuildProfiles.Name
 
 -- Normal behavior is automatic: Studio gets development tools and every
@@ -25,7 +23,6 @@ local activeProfile: BuildProfile = FORCE_PROFILE or if RunService:IsStudio() th
 local settings = BuildProfiles.get(activeProfile)
 
 local DevConfig = {
-	Mode = "FunTest" :: Mode,
 	Profile = activeProfile,
 
 	-- Draws the tuning overlay: load position, per-strap tension, chassis
@@ -51,16 +48,8 @@ local DevConfig = {
 	VerbosePhysics = settings.VerbosePhysics,
 }
 
---[[
-	Developer affordances are gated on being in the fun-test build as well as
-	on their own flag, so shipping Depot can never expose them by accident.
-]]
 function DevConfig.isDevToolingEnabled(): boolean
-	return DevConfig.Mode == "FunTest" and DevConfig.Profile == "Development" and DevConfig.LiveTuning
-end
-
-function DevConfig.isFunTest(): boolean
-	return DevConfig.Mode == "FunTest"
+	return DevConfig.Profile == "Development" and DevConfig.LiveTuning
 end
 
 function DevConfig.isRelease(): boolean

@@ -13,10 +13,9 @@ local RunService = game:GetService("RunService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 
 local LabProgression = require(Shared:WaitForChild("LabProgression"))
-local RoleKits = require(Shared:WaitForChild("RoleKits"))
+local TruckPaints = require(Shared:WaitForChild("TruckPaints"))
 local Types = require(Shared:WaitForChild("Types"))
 
-local EconomyService = require(script.Parent.EconomyService)
 local PlayerDataService = require(script.Parent.PlayerDataService)
 
 export type Snapshot = {
@@ -43,7 +42,7 @@ local LabProgressionService = {}
 
 local function buildUnlocked(profile: Types.ProfileData): { [string]: boolean }
 	local unlocked: { [string]: boolean } = {}
-	for _, paint in RoleKits.getAllPaints() do
+	for _, paint in TruckPaints.getAllPaints() do
 		if paint.cost <= 0 or profile.unlockedPaints[paint.id] then
 			unlocked[paint.id] = true
 		end
@@ -102,7 +101,7 @@ function LabProgressionService.snapshot(player: Player): Snapshot
 		unlockedByUser[player.UserId] = unlocked
 	end
 
-	local equippedPaint = if RoleKits.getPaint(profile.equippedPaint) then profile.equippedPaint else "Factory"
+	local equippedPaint = if TruckPaints.getPaint(profile.equippedPaint) then profile.equippedPaint else "Factory"
 	return {
 		ready = true,
 		saving = not PlayerDataService.isVolatile(player),
@@ -112,9 +111,67 @@ function LabProgressionService.snapshot(player: Player): Snapshot
 	}
 end
 
+--[[
+	Paint purchase and equip.
+
+	These lived in EconomyService alongside convoy banking, kit shops and daily
+	bonuses. That module went with the rest of the depot build; paint is the
+	only part of it the fun-test ever used, so it moved here rather than keeping
+	four hundred lines alive to reach two functions.
+
+	Equipping is not buying. Paint once had only a purchase path, so the
+	client's equip button silently spent credits on anything not already owned.
+	Keeping them separate is what fixed that, and it stays separate here.
+]]
+local function purchasePaint(player: Player, paintId: string): (boolean, string)
+	local paint = TruckPaints.getPaint(paintId)
+	if not paint then
+		return false, "Unknown paint."
+	end
+	local profile = PlayerDataService.get(player)
+	if not profile then
+		return false, "Profile still loading."
+	end
+	local owned = profile.unlockedPaints[paintId] == true or paint.cost <= 0
+	if not owned then
+		if profile.credits < paint.cost then
+			return false, string.format("Need %d more credits.", paint.cost - profile.credits)
+		end
+		PlayerDataService.update(player, function(data)
+			data.credits -= paint.cost
+			data.unlockedPaints[paintId] = true
+			data.equippedPaint = paintId
+		end)
+		return true, "Unlocked " .. paint.label .. "."
+	end
+
+	PlayerDataService.update(player, function(data)
+		data.equippedPaint = paintId
+	end)
+	return true, paint.label .. " equipped."
+end
+
+local function equipPaint(player: Player, paintId: string): (boolean, string)
+	local paint = TruckPaints.getPaint(paintId)
+	if not paint then
+		return false, "Unknown paint."
+	end
+	local profile = PlayerDataService.get(player)
+	if not profile then
+		return false, "Profile still loading."
+	end
+	if profile.unlockedPaints[paintId] ~= true and paint.cost > 0 then
+		return false, "You do not own that paint."
+	end
+	PlayerDataService.update(player, function(data)
+		data.equippedPaint = paintId
+	end)
+	return true, paint.label .. " equipped."
+end
+
 function LabProgressionService.selectPaint(player: Player, paintId: string): (boolean, string)
 	local profile = PlayerDataService.get(player)
-	local paint = RoleKits.getPaint(paintId)
+	local paint = TruckPaints.getPaint(paintId)
 	if not profile then
 		return false, "Profile still loading."
 	end
@@ -130,9 +187,9 @@ function LabProgressionService.selectPaint(player: Player, paintId: string): (bo
 		if profile.equippedPaint == paintId then
 			return false, paint.label .. " is already equipped."
 		end
-		return EconomyService.equipPaint(player, paintId)
+		return equipPaint(player, paintId)
 	end
-	local ok, message = EconomyService.purchasePaint(player, paintId)
+	local ok, message = purchasePaint(player, paintId)
 	if ok then
 		LabProgressionService.invalidatePaints(player)
 	end
@@ -147,7 +204,7 @@ function LabProgressionService.paintColorFor(player: Player?): Color3
 			paintId = profile.equippedPaint
 		end
 	end
-	local paint = RoleKits.getPaint(paintId) or RoleKits.getPaint("Factory")
+	local paint = TruckPaints.getPaint(paintId) or TruckPaints.getPaint("Factory")
 	assert(paint, "Factory paint is missing")
 	return paint.color
 end

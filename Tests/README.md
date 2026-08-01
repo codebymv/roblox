@@ -12,7 +12,7 @@ Run it from the repository root; it reads its modules by relative path. CI runs
 it on every push, and it takes a couple of seconds.
 
 Covers `LabConfig` invariants, `LabProgression` reward policy, `RouteMath`
-arc-length maths, `TokenBucket` arithmetic, `TuningSchema` consistency, and the `MatchConfig` leg ladder. Lune
+arc-length maths, `TokenBucket` arithmetic, `TuningSchema` consistency. Lune
 supplies the Roblox datatypes but nothing else, so a module is testable here
 only if it touches no service, creates no `Instance`, and requires nothing
 through the DataModel.
@@ -45,7 +45,7 @@ paint validators exist, that the world
 Bootstrap built has the parts it should, that the truck settles on its
 suspension instead of sinking or launching, that the crate stays on the bed, and
 that every tunable reached an editable attribute. It branches on
-`DevConfig.Mode`, since the two builds share almost no runtime.
+the one world Bootstrap builds.
 
 It waits two seconds for the physics solver to settle, so it is not instant.
 

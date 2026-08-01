@@ -29,7 +29,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Commerce = require(Shared:WaitForChild("Commerce"))
-local RoleKits = require(Shared:WaitForChild("RoleKits"))
+local TruckPaints = require(Shared:WaitForChild("TruckPaints"))
 
 local PlayerDataService = require(script.Parent.PlayerDataService)
 
@@ -64,7 +64,7 @@ local function applyGrant(profile, grant): () -> ()
 
 	if grant.kind == "Paint" then
 		local paintId = grant.paintId
-		if paintId == nil or not RoleKits.getPaint(paintId) then
+		if paintId == nil or not TruckPaints.getPaint(paintId) then
 			return function() end
 		end
 		local ownedBefore = profile.unlockedPaints[paintId]

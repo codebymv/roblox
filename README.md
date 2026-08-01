@@ -2,33 +2,29 @@
 
 Prototype project for a **Co-op Operational Catastrophe** experience on Roblox:
 
-> Up to four crews share one depot. Each crew hauls cargo leg by leg, and after every delivery votes to bank the stack or push for a harder, richer leg. One bad strap, turn, or repair cascades into a readable disaster that forfeits everything unbanked.
+> A crew of up to four shares one truck. One drives; the rest work the straps holding a real crate onto a real bed. After every delivery the crew votes on the next contract: a plain haul, or Catastrophe pressure for more pay. One bad strap, turn or corner cascades into a readable disaster.
 
 This folder is intentionally separate from the UE5 PlatypunkGame repo.
 
-## Two builds, one switch
+## One build
 
-`src/Shared/DevConfig.lua` decides which game boots.
-
-| Mode | What runs | What it is for |
-|---|---|---|
-| `FunTest` **(current default)** | `TruckLab`: one crew, one physics truck, one route, persistent rewards and truck paint | Public playtest and progression validation |
-| `Depot` | `DepotService`: four bays, economy, persistence, kits, leg ladder | The full meta build |
-
-Nothing is deleted between the two. In `FunTest` the old depot, role kits,
-live-ops and leg ladder never initialise. The shared profile cache now records
-Cargo Cash and truck-paint ownership around the current physics run.
-
-Tooling profiles are separate from the mode switch. Studio automatically uses
-`Development` (debug overlay, live tuning, commands, and run artifacts), while
-published servers use a fail-closed `Release` profile with only server telemetry
-left on. The fun-test place is capped to one four-player crew.
-
-The prototype was moved into `FunTest` after
-[Docs/CoreFunAudit_V0.md](Docs/CoreFunAudit_V0.md) found that the truck was an
+There used to be two. `Depot` was the original prototype -- four bays, a leg
+ladder, bank-or-push, role kits, live-ops -- and
+[Docs/CoreFunAudit_V0.md](Docs/CoreFunAudit_V0.md) found that its truck was an
 anchored, non-collidable model repositioned by `PivotTo`, that cargo condition
 was a single scalar the visuals obeyed rather than reported, and that only the
 Driver had continuous input.
+
+The physics-first rebuild replaced it and the depot was kept dormant behind a
+mode switch for a while afterwards. It has now been deleted: about 4,200 lines
+across thirteen modules that never booted, but were still paid for on every
+format, lint, type check and refactor. Its crew-vote phase machine was
+harvested first and is what the contract board runs on.
+
+Tooling profiles remain. Studio automatically uses `Development` (debug overlay,
+live tuning, commands, and run artifacts), while published servers use a
+fail-closed `Release` profile with only server telemetry left on. The place is
+capped to one four-player crew.
 
 ## Structure
 
@@ -37,8 +33,8 @@ roblox/
   README.md
   Docs/                     Design intent; Docs/README.md says what is still current
   src/Shared/               Config, types, tuning schema, manifests, kits, networking
-  src/Server/               Fun-test lab, physics truck, depot, economy, persistence
-  src/Client/               UI kit, lab HUD and debug overlay, crew HUD, depot panel
+  src/Server/               Session, physics truck, cargo, telemetry, commerce, profiles
+  src/Client/               UI kit, HUD, contract board, audio buses, particles, overlay
   Tests/                    Headless suite (Lune, in CI) and Studio smoke test
   rokit.toml                Pinned toolchain
   default.project.json      Rojo project map
@@ -83,7 +79,7 @@ to API Services*. Without it the server runs profiles in volatile mode: everythi
 saves, and it says so once in the output. Studio uses a separate test store, so these checks cannot
 overwrite live player balances.
 
-## The fun-test loop (`DevConfig.Mode = "FunTest"`)
+## The loop
 
 One truck, one crate, one road. A run starts a couple of seconds after you join
 and restarts a couple of seconds after it ends.
@@ -158,39 +154,6 @@ simulation errors, and aggregate client-to-server drive-input age. It contains
 no player names or raw input history and can be broken down by outcome, crew
 size, and run variant in the Creator Dashboard.
 
-## The depot loop (`DevConfig.Mode = "Depot"`)
-
-The server is a **depot** with four bays. Each bay is one crew of up to four on its own parallel
-route lane, visible to everyone else in the yard.
-
-1. **Spawn → auto-crewed** into the emptiest open bay. Step on another bay pad to switch.
-2. **Staging** departs on its own: about 5 seconds solo, 14 with a forming crew. Ready or *Roll Out
-   Now* skips the wait.
-3. **Leg N** rolls a cargo from the manifest (rarity, value multiplier, one mechanical quirk) and
-   runs a shorter clock and higher failure pressure than the leg before it.
-4. **Delivery Hold** lights the zone. Stop inside it to complete the leg.
-5. **Bank or Push** · twelve seconds. Majority rules, a tie banks, a timeout banks. Bank pays every
-   crew member the full stack in Freight Credits; push doubles down on a harder leg.
-6. **A wipe forfeits the whole unbanked stack** and resets your convoy streak.
-
-Credits buy permanent per-role kits from the Outfitter (widen timing windows, raise safe corner
-speed, restore more integrity) and cab paint. Nothing purchasable skips an interaction.
-
-### Controls
-
-- **Driver (keyboard):** `WASD` or arrow keys; hold `Space` to brake.
-- **Driver (touch):** on-screen left/right, Go, Reverse, and Brake buttons.
-- **Spotter:** tap **Ping Hazard** when the warning appears.
-- **Strapper / Repair:** hold the contextual action button until the save completes.
-- **Depot panel:** `Tab` or the DEPOT button · bays, Outfitter, standings, daily bonus.
-
-Leg 1 always opens with a guaranteed, generously timed save moment chosen from a role the crew
-actually has, so a first session hits the core interaction within seconds rather than watching a
-cascade it cannot answer.
-
-Solo remains playable: a lone player is always Driver, and the opening beat becomes the corner
-brake instead of a strap only a Strapper could fix.
-
 ## Server layout
 
 ### The spine
@@ -213,7 +176,7 @@ worth copying into a second title. The game layer below is not.
 | `src/Shared/RouteMath.lua` | Arc-length progress and its inverse, dependency-free |
 | `src/Client/UIKit.lua` | Panels, labels and buttons, plus setters that skip unchanged writes |
 
-### Fun-test build
+### The game
 
 | Module | Responsibility |
 |---|---|
@@ -222,18 +185,6 @@ worth copying into a second title. The game layer below is not.
 | `src/Server/CargoLoad.lua` | Roped crate, per-strap tension and health, derived condition |
 | `src/Server/StrapperStations.lua` | Station occupancy, committed traversals, counterweight, throws |
 | `src/Server/PressureDirector.lua` | Three pressure categories that perturb state, never outcomes |
-
-### Depot build
-
-| Module | Responsibility |
-|---|---|
-| `src/Server/EconomyService.lua` | Sole authority for payouts, streaks, purchases |
-| `src/Server/WorldBuilder.lua` | Depot hub, board, four parallel lanes |
-| `src/Server/DepotService.lua` | Bays, membership, spectating, remotes, depot snapshot |
-| `src/Server/CrewMatch.lua` | One crew's phase machine and leg ladder |
-| `src/Server/CargoRig.lua` | One crew's truck |
-| `src/Server/FailureRunner.lua` | One crew's failure cadence |
-| `src/Server/RoleService.lua` | One crew's role assignment and kit effects |
 
 ## Tests
 

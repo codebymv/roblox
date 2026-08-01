@@ -6,29 +6,6 @@ local RunService = game:GetService("RunService")
 local FOLDER_NAME = "CargoCatastropheRemotes"
 
 local REMOTE_NAMES = {
-	-- Server to client state
-	CrewSnapshot = "CrewSnapshot",
-	DepotSnapshot = "DepotSnapshot",
-	FailurePrompt = "FailurePrompt",
-	CargoReveal = "CargoReveal",
-	Toast = "Toast",
-
-	-- Client intent
-	RequestSnapshot = "RequestSnapshot",
-	RequestJoinBay = "RequestJoinBay",
-	RequestLeaveBay = "RequestLeaveBay",
-	RequestSpectate = "RequestSpectate",
-	RequestReady = "RequestReady",
-	RequestStart = "RequestStart",
-	RequestDecision = "RequestDecision",
-	RequestNewConvoy = "RequestNewConvoy",
-	RequestPurchase = "RequestPurchase",
-	RequestEquip = "RequestEquip",
-	RequestDaily = "RequestDaily",
-	RoleAction = "RoleAction",
-	DriveInput = "DriveInput",
-
-	-- Fun-test build. Unused when DevConfig.Mode is "Depot".
 	LabSnapshot = "LabSnapshot",
 	LabDebug = "LabDebug",
 	LabEvent = "LabEvent",

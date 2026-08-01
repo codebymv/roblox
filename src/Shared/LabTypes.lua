@@ -198,7 +198,7 @@ export type LabSnapshot = {
 	recordsBeaten: { string }?,
 
 	-- Persistent public-build progression. Paint definitions themselves are
-	-- static in RoleKits; only ownership and the equipped choice cross the wire.
+	-- static in TruckPaints; only ownership and the equipped choice cross the wire.
 	progressionReady: boolean,
 	progressionSaving: boolean,
 	credits: number,

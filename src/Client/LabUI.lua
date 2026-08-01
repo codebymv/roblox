@@ -24,7 +24,7 @@ local LabTypes = require(Shared:WaitForChild("LabTypes"))
 local Net = require(Shared:WaitForChild("Net"))
 local PresentationMath = require(Shared:WaitForChild("PresentationMath"))
 local Achievements = require(Shared:WaitForChild("Achievements"))
-local RoleKits = require(Shared:WaitForChild("RoleKits"))
+local TruckPaints = require(Shared:WaitForChild("TruckPaints"))
 local RunCauses = require(Shared:WaitForChild("RunCauses"))
 
 local DeviceInput = require(script.Parent.DeviceInput)
@@ -107,7 +107,7 @@ local paintPending = false
 local paintPendingAt = 0
 local paintSelectionInitialized = false
 local selectedPaintIndex = 1
-local paintDefs = RoleKits.getAllPaints()
+local paintDefs = TruckPaints.getAllPaints()
 
 -- ------------------------------------------------------------- ui helpers
 

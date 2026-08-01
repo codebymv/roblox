@@ -38,7 +38,7 @@ export type Grant = {
 	kind: string,
 	-- Credits grants. Ignored by other kinds.
 	amount: number?,
-	-- Paint grants. Must name an id in RoleKits.
+	-- Paint grants. Must name an id in TruckPaints.
 	paintId: string?,
 }
 

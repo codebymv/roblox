@@ -20,7 +20,7 @@
 local Net = require(script.Parent.Net)
 local LabConfig = require(script.Parent.LabConfig)
 local Commerce = require(script.Parent.Commerce)
-local RoleKits = require(script.Parent.RoleKits)
+local TruckPaints = require(script.Parent.TruckPaints)
 local RunVariants = require(script.Parent.RunVariants)
 
 local LabRemotes = {}
@@ -145,7 +145,7 @@ local validators: { [string]: (any) -> any } = {
 	end,
 
 	[Net.Names.LabPaint] = function(payload: any): PaintPayload?
-		if typeof(payload) ~= "string" or not RoleKits.getPaint(payload) then
+		if typeof(payload) ~= "string" or not TruckPaints.getPaint(payload) then
 			return nil
 		end
 		return { paintId = payload }
