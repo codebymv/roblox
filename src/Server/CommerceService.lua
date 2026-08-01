@@ -11,10 +11,9 @@
 
 	1. A repeated receipt must not grant twice. Granted purchase ids live in the
 	   profile, so the check survives a server hop.
-	2. A grant must not be confirmed before it is durable. If the save fails the
-	   in-memory grant is rolled back and the receipt is left unconfirmed, so
-	   Roblox retries later rather than the player losing what they bought at
-	   logout.
+	2. A grant must not be confirmed before it is durable. The grant and receipt
+	   id are committed together through one atomic profile transform; failure
+	   leaves the receipt unconfirmed so Roblox retries later.
 	3. An unrecognised product is never confirmed. Leaving it pending means a
 	   deploy that adds the product still grants it; confirming would take the
 	   money and give nothing.
@@ -31,6 +30,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Commerce = require(Shared:WaitForChild("Commerce"))
 local TruckPaints = require(Shared:WaitForChild("TruckPaints"))
 
+local LabProgressionService = require(script.Parent.LabProgressionService)
 local PlayerDataService = require(script.Parent.PlayerDataService)
 
 local CommerceService = {}
@@ -45,39 +45,24 @@ local function log(message: string)
 	print("[CargoCommerce] " .. message)
 end
 
---[[
-	Apply a grant, and hand back the inverse.
-
-	The inverse exists for rule 2: if the durable save fails after the grant
-	landed in memory, the profile has to go back exactly as it was. Restoring a
-	captured value rather than subtracting means an unlock the player already
-	owned before the purchase is not taken away by the rollback.
-]]
-local function applyGrant(profile, grant): () -> ()
+local function applyGrant(profile, grant)
 	if grant.kind == "Credits" then
-		local before = profile.credits
-		profile.credits = math.max(0, before + math.max(0, grant.amount or 0))
-		return function()
-			profile.credits = before
-		end
+		profile.credits = math.max(0, profile.credits + math.max(0, grant.amount or 0))
+		return
 	end
 
 	if grant.kind == "Paint" then
 		local paintId = grant.paintId
 		if paintId == nil or not TruckPaints.getPaint(paintId) then
-			return function() end
+			return
 		end
-		local ownedBefore = profile.unlockedPaints[paintId]
 		profile.unlockedPaints[paintId] = true
-		return function()
-			profile.unlockedPaints[paintId] = ownedBefore
-		end
+		return
 	end
 
 	-- Commerce.CosmeticGrants is the allowlist and the headless suite holds it,
 	-- so reaching here means a grant kind was added without a handler.
 	warn("[CargoCommerce] No handler for grant kind: " .. tostring(grant.kind))
-	return function() end
 end
 
 local function processReceipt(info): Enum.ProductPurchaseDecision
@@ -122,32 +107,34 @@ local function processReceipt(info): Enum.ProductPurchaseDecision
 		return Decision.NotProcessedYet
 	end
 
-	local revert: (() -> ())? = nil
-	PlayerDataService.update(player, function(data)
-		revert = applyGrant(data, product.grant)
+	--[[
+		The check, grant and receipt marker are one UpdateAsync transform against
+		the latest stored profile. Roblox may deliver the same receipt to two
+		servers; whichever transform commits first makes every retry a no-op.
+	]]
+	local alreadyGranted = false
+	local committed, updatedProfile = PlayerDataService.updateAtomic(player, function(data)
+		alreadyGranted = Commerce.hasReceipt(data.grantedReceipts, purchaseId)
+		if alreadyGranted then
+			return
+		end
+		applyGrant(data, product.grant)
 		Commerce.appendReceipt(data.grantedReceipts, purchaseId)
 	end)
-
-	-- Rule 2. Confirm only once it is on disk.
-	if not PlayerDataService.flush(player) then
-		PlayerDataService.update(player, function(data)
-			if revert then
-				revert()
-			end
-			for index, recorded in data.grantedReceipts do
-				if recorded == purchaseId then
-					table.remove(data.grantedReceipts, index)
-					break
-				end
-			end
-		end)
-		warn("[CargoCommerce] Save failed for " .. player.Name .. "; leaving the receipt for a retry.")
+	if not committed then
+		warn("[CargoCommerce] Atomic grant failed for " .. player.Name .. "; leaving the receipt for a retry.")
 		return Decision.NotProcessedYet
 	end
 
-	log(string.format("granted %s to %s", product.key, player.Name))
-	if analytics then
-		analytics:purchaseGranted(player, product)
+	if not alreadyGranted then
+		LabProgressionService.invalidatePaints(player)
+		if updatedProfile then
+			player:SetAttribute("CargoCredits", updatedProfile.credits)
+		end
+		log(string.format("granted %s to %s", product.key, player.Name))
+		if analytics then
+			analytics:purchaseGranted(player, product)
+		end
 	end
 	return Decision.PurchaseGranted
 end
@@ -192,6 +179,7 @@ function CommerceService.syncPasses(player: Player)
 			PlayerDataService.update(player, function(data)
 				applyGrant(data, product.grant)
 			end)
+			LabProgressionService.invalidatePaints(player)
 		end
 	end
 end

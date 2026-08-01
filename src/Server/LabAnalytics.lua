@@ -299,6 +299,13 @@ function LabAnalytics:purchaseGranted(player: Player, product)
 	})
 end
 
+function LabAnalytics:invitePrompted(player: Player, crewSize: number, phase: string)
+	self:_custom(player, "CargoInvitePrompted", 1, {
+		[Enum.AnalyticsCustomFieldKeys.CustomField01.Name] = "Crew - " .. tostring(crewSize),
+		[Enum.AnalyticsCustomFieldKeys.CustomField02.Name] = "Phase - " .. phase,
+	})
+end
+
 function LabAnalytics:shouldAskForFeedback(player: Player): boolean
 	local state = self.players[player.UserId]
 	return state ~= nil and state.runsFinished >= 1 and state.feedback == nil

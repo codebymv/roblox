@@ -31,6 +31,9 @@ type Entry = {
 	volatile: boolean,
 	loaded: boolean,
 	saving: boolean,
+	-- An atomic DataStore transform owns the profile while this is true. Normal
+	-- writers wait rather than modifying the live table underneath the transform.
+	transacting: boolean,
 }
 
 local PlayerDataService = {}
@@ -124,6 +127,7 @@ local function loadProfile(player: Player): Entry
 		volatile = false,
 		loaded = false,
 		saving = false,
+		transacting = false,
 	}
 	entries[player.UserId] = entry
 
@@ -156,10 +160,10 @@ local function loadProfile(player: Player): Entry
 	return entry
 end
 
-local function saveEntry(userId: number, entry: Entry): boolean
+local function saveEntry(userId: number, entry: Entry, insideTransaction: boolean?): boolean
 	-- PlayerRemoving, autosave, and BindToClose can converge on the same
 	-- profile. Serialize them so an older snapshot cannot finish last.
-	while entry.saving do
+	while entry.saving or (entry.transacting and not insideTransaction) do
 		task.wait()
 	end
 	if entry.volatile or not entry.dirty then
@@ -229,10 +233,85 @@ function PlayerDataService.update(player: Player, mutator: (Types.ProfileData) -
 	if not entry or not entry.loaded then
 		return nil
 	end
+	while entry.transacting do
+		if entries[player.UserId] ~= entry or not player.Parent then
+			return nil
+		end
+		task.wait()
+	end
 	mutator(entry.data)
 	entry.revision += 1
 	entry.dirty = true
 	return entry.data
+end
+
+--[[
+	Run one non-yielding profile transform inside DataStore UpdateAsync.
+
+	Developer-product receipts need this stronger path: checking a purchase id,
+	granting it and recording it must be one operation against the latest stored
+	value. A normal in-memory update followed by flush leaves a window where two
+	servers can both observe "not granted" and both award the same receipt.
+
+	The live profile is frozen for the duration, flushed first so ordinary local
+	progress is represented in the stored value, then replaced with the value
+	that UpdateAsync committed. Callers must keep transform engine-free and must
+	not yield; Roblox may invoke it more than once when a write conflicts.
+]]
+function PlayerDataService.updateAtomic(
+	player: Player,
+	transform: (Types.ProfileData) -> ()
+): (boolean, Types.ProfileData?)
+	local entry = entries[player.UserId]
+	if not entry or not entry.loaded or entry.volatile then
+		return false, nil
+	end
+
+	while entry.transacting or entry.saving do
+		if entries[player.UserId] ~= entry or not player.Parent then
+			return false, nil
+		end
+		task.wait()
+	end
+	entry.transacting = true
+
+	local function finish(ok: boolean, data: Types.ProfileData?): (boolean, Types.ProfileData?)
+		entry.transacting = false
+		return ok, data
+	end
+
+	-- With normal writers paused, one final flush makes the DataStore value the
+	-- correct starting point for the transaction without dropping local play.
+	if entry.dirty and not saveEntry(player.UserId, entry, true) then
+		return finish(false, nil)
+	end
+
+	local dataStore = getStore()
+	if not dataStore then
+		return finish(false, nil)
+	end
+
+	local ok, result = pcall(function()
+		return dataStore:UpdateAsync(keyFor(player.UserId), function(raw)
+			local current = reconcile(raw)
+			transform(current)
+			return current
+		end)
+	end)
+	if not ok or typeof(result) ~= "table" then
+		warn(
+			"[CargoCatastrophe] Atomic profile update failed for "
+				.. tostring(player.UserId)
+				.. ": "
+				.. tostring(result)
+		)
+		return finish(false, nil)
+	end
+
+	entry.data = reconcile(result)
+	entry.revision += 1
+	entry.dirty = false
+	return finish(true, entry.data)
 end
 
 function PlayerDataService.isVolatile(player: Player): boolean

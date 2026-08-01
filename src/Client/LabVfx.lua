@@ -38,6 +38,9 @@ local PARTICLE_TEXTURE = "rbxasset://textures/particles/sparkles_main.dds"
 
 local WHEEL_ORDER = { "FL", "FR", "RL", "RR" }
 local REFRESH_SECONDS = 0.5
+-- Weak keys let a rebuilt rig and its emitters disappear without a cleanup
+-- pass. Spec tables are stable identities from VfxSpec.
+local appliedSpecs = setmetatable({}, { __mode = "k" })
 
 local function applyCommon(emitter: ParticleEmitter, spec)
 	emitter.Texture = PARTICLE_TEXTURE
@@ -66,6 +69,7 @@ local function makeEmitter(parent: Instance, name: string, spec): ParticleEmitte
 	local emitter = Instance.new("ParticleEmitter")
 	emitter.Name = name
 	applyCommon(emitter, spec)
+	appliedSpecs[emitter] = spec
 	emitter.Parent = parent
 	return emitter
 end
@@ -186,7 +190,10 @@ function LabVfx.mount()
 		if not alive(emitter) then
 			return
 		end
-		applyCommon(emitter, spec)
+		if appliedSpecs[emitter] ~= spec then
+			applyCommon(emitter, spec)
+			appliedSpecs[emitter] = spec
+		end
 		emitter:Emit(math.max(1, math.floor(spec.count * (scale or 1))))
 	end
 
@@ -196,13 +203,25 @@ function LabVfx.mount()
 		end
 		local amount = math.clamp(intensity, 0, 1)
 		if amount <= 0.01 or spec.rate <= 0 then
-			emitter.Enabled = false
-			emitter.Rate = 0
+			if emitter.Enabled then
+				emitter.Enabled = false
+			end
+			if emitter.Rate ~= 0 then
+				emitter.Rate = 0
+			end
 			return
 		end
-		applyCommon(emitter, spec)
-		emitter.Rate = spec.rate * amount
-		emitter.Enabled = true
+		if appliedSpecs[emitter] ~= spec then
+			applyCommon(emitter, spec)
+			appliedSpecs[emitter] = spec
+		end
+		local rate = spec.rate * amount
+		if math.abs(emitter.Rate - rate) > 0.05 then
+			emitter.Rate = rate
+		end
+		if not emitter.Enabled then
+			emitter.Enabled = true
+		end
 	end
 
 	local function handleSnapshot(snap: LabTypes.LabSnapshot)

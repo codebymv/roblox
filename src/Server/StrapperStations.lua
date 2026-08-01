@@ -29,6 +29,8 @@ local LabConfig = require(Shared:WaitForChild("LabConfig"))
 local StrapperStations = {}
 StrapperStations.__index = StrapperStations
 
+local OWNERSHIP_SETTLE_SECONDS = 0.45
+
 function StrapperStations.new(chassisRig, cargoLoad)
 	return setmetatable({
 		chassisRig = chassisRig,
@@ -37,7 +39,13 @@ function StrapperStations.new(chassisRig, cargoLoad)
 		occupancy = {},
 		pendingThrows = {} :: { string },
 		rotationGraceUntil = 0,
+		-- Soft reseat must not fire while claimOwnership is breaking SeatWelds.
+		ownershipSettleUntil = 0,
 	}, StrapperStations)
+end
+
+function StrapperStations:markOwnershipSettle()
+	self.ownershipSettleUntil = os.clock() + OWNERSHIP_SETTLE_SECONDS
 end
 
 local function bezier(a: Vector3, control: Vector3, b: Vector3, t: number): Vector3
@@ -147,9 +155,9 @@ end
 --[[
 	Sitting a humanoid also hands that player network ownership of the truck,
 	which would kill every server-applied force. Ownership is taken straight
-	back once the SeatWeld exists, and that reclaim often breaks the weld, so
-	we Sit again after. Without the second Sit the avatar walks free while the
-	camera and drive inputs still follow the truck.
+	back once the SeatWeld exists. That reclaim can break the weld once; we do
+	at most one snap+Sit+claim retry, then settle grace blocks soft reseat from
+	turning it into a 1 Hz Sit/claim hitch.
 ]]
 function StrapperStations:_seat(seat: Seat, humanoid: Humanoid)
 	if not seat.Parent or not humanoid.Parent then
@@ -164,12 +172,19 @@ function StrapperStations:_seat(seat: Seat, humanoid: Humanoid)
 		if not seat.Parent or not humanoid.Parent then
 			return
 		end
-		self.chassisRig:claimOwnership()
+		if self.chassisRig:claimOwnership() then
+			self:markOwnershipSettle()
+		end
 		if seat.Occupant ~= humanoid then
 			self:_snapToSeat(seat, humanoid)
 			seat:Sit(humanoid)
 			task.defer(function()
-				self.chassisRig:claimOwnership()
+				if not seat.Parent or not humanoid.Parent then
+					return
+				end
+				if self.chassisRig:claimOwnership() then
+					self:markOwnershipSettle()
+				end
 			end)
 		end
 	end)
@@ -214,6 +229,11 @@ function StrapperStations:recoverAll()
 	end
 	table.clear(self.occupancy)
 
+	-- Dead seat/weld after a rebuild left soft-spectators with a role but no
+	-- attach path (continue used to skip them). Recreate after the live pass so
+	-- we do not mutate self.slots while iterating it.
+	local recreate = {}
+
 	for _, slot in self.slots do
 		slot.thrown = false
 		slot.thrownUntil = 0
@@ -224,16 +244,15 @@ function StrapperStations:recoverAll()
 
 		local weldLive = slot.weld and slot.weld.Parent
 		local seatLive = slot.seat and slot.seat.Parent
-		if not weldLive and not seatLive then
+		if not weldLive or not seatLive then
+			table.insert(recreate, { player = slot.player, role = slot.role })
 			continue
 		end
 
 		if slot.role == "Driver" then
 			slot.station = nil
 			slot.movingTo = nil
-			if weldLive then
-				slot.weld.C0 = LabConfig.DriverSeatOffset
-			end
+			slot.weld.C0 = LabConfig.DriverSeatOffset
 		else
 			local station = slot.station or slot.movingTo
 			if not station or self.occupancy[station] then
@@ -243,18 +262,23 @@ function StrapperStations:recoverAll()
 			slot.movingTo = nil
 			if station then
 				self.occupancy[station] = slot.player.UserId
-				if weldLive then
-					slot.weld.C0 = LabConfig.StationLocal[station]
-				end
+				slot.weld.C0 = LabConfig.StationLocal[station]
 			end
 		end
 
 		local humanoid = self:_humanoidReady(slot.player)
-		if humanoid and seatLive then
+		if humanoid then
 			self:_seat(slot.seat, humanoid)
 		end
 	end
-	self.chassisRig:claimOwnership()
+
+	for _, item in recreate do
+		self:detach(item.player)
+		self:attach(item.player, item.role)
+	end
+	if self.chassisRig:claimOwnership() then
+		self:markOwnershipSettle()
+	end
 end
 
 -- A dead character must not be auto-seated by step() while Roblox is creating
@@ -494,7 +518,9 @@ function StrapperStations:rotateCrew(graceSeconds: number)
 		end
 	end
 
-	self.chassisRig:claimOwnership()
+	if self.chassisRig:claimOwnership() then
+		self:markOwnershipSettle()
+	end
 	return assignments, newDriverId
 end
 
@@ -616,7 +642,11 @@ end
 
 function StrapperStations:_reseat(slot)
 	if not slot.seat or not slot.seat.Parent or not slot.weld or not slot.weld.Parent then
-		slot.thrownUntil = os.clock() + 0.5
+		local player = slot.player
+		local role = slot.role
+		self:detach(player)
+		-- attach may fail until the character is ready; roles stay on LabSession.
+		self:attach(player, role)
 		return
 	end
 
@@ -673,11 +703,13 @@ function StrapperStations:step(dt: number)
 
 		-- claimOwnership after Sit can break the SeatWeld. Put anyone who
 		-- slipped out back in before they walk off-camera and take void damage.
+		-- Skip during ownership settle so reclaim and soft reseat cannot oscillate.
 		local humanoid = self:_humanoidReady(slot.player)
 		local seated = humanoid and seatLive and slot.seat.Occupant == humanoid
+		local settling = os.clock() < self.ownershipSettleUntil
 		if seated then
 			slot.missedSeat = 0
-		elseif seatLive and humanoid and os.clock() - (slot.lastReseatAt or 0) > 0.35 then
+		elseif seatLive and humanoid and not settling and os.clock() - (slot.lastReseatAt or 0) > 0.35 then
 			slot.lastReseatAt = os.clock()
 			slot.missedSeat = (slot.missedSeat or 0) + 1
 			-- After a couple of soft Sit attempts, snap the body onto the seat

@@ -45,14 +45,19 @@ local RateLimiter = require(script.Parent.RateLimiter)
 local StrapperStations = require(script.Parent.StrapperStations)
 local WorldBuilder = require(script.Parent.WorldBuilder)
 local LabRespawnPolicy = require(Shared:WaitForChild("LabRespawnPolicy"))
+local LabRigPolicy = require(Shared:WaitForChild("LabRigPolicy"))
 
 local SNAPSHOT_INTERVAL = 0.1
 local DEBUG_INTERVAL = 0.2
-local OWNERSHIP_INTERVAL = 1
+-- Safety poll only; seating paths reclaim immediately. Slower than SeatWeld settle.
+local OWNERSHIP_INTERVAL = 2
 local INPUT_SAMPLE_INTERVAL = 0.25
 
--- Below twenty frames a second the solver is already in trouble; clamping
--- stops a hitch from being integrated as one enormous step.
+-- Chassis impulses run on Stepped with a fixed accumulator so hitchy wall-clock
+-- dt cannot become one fat ApplyImpulse. Heartbeat keeps phase/UI clocks.
+local FIXED_DT = 1 / 60
+local MAX_SUBSTEPS = 4
+-- Cap how much Stepped dt we absorb into the accumulator in one frame.
 local MAX_STEP = 1 / 20
 local DELIVERY_CHECK_INTERVAL = 0.2
 
@@ -108,12 +113,16 @@ function LabSession.new(config: Config)
 		ownershipAccumulator = 0,
 		sampleAccumulator = 0,
 		deliveryAccumulator = 0,
+		physicsAccumulator = 0,
+		lastDriveInput = nil :: { throttle: number, steering: number, braking: boolean }?,
 
 		-- Set when the simulation step throws. See _bindHeartbeat for why this
 		-- latches rather than retrying.
 		stepFailed = false,
 		lastPendingRecoverAt = 0,
 		started = false,
+		-- Coalesce overlapping Result timer + R into a single Staging entry.
+		stagingBusy = false,
 
 		-- Landmarks already warned about this run, keyed by name.
 		announcedLandmarks = {},
@@ -153,6 +162,54 @@ function LabSession:_buildRig()
 		self.telemetry:notePressure(label, self.chassisRig:getRouteProgress())
 		self:toast(label)
 	end)
+end
+
+function LabSession:_rigPreflightOk(): boolean
+	if not self.chassisRig or not self.cargoLoad then
+		return false
+	end
+	local chassis = self.chassisRig:getChassis()
+	local crate = self.cargoLoad:getCrate()
+	if not chassis or not chassis.Parent or not crate or not crate.Parent then
+		return false
+	end
+	return self.chassisRig:hasCompleteWheelSet() and self.cargoLoad:hasCompleteLoad()
+end
+
+--[[
+	Catch damage Staging missed (partial destroy during countdown, cheap reset
+	that left gaps). Forces a full rebuild, then restores the current variant
+	pose so enterRun can unfreeze a complete truck.
+]]
+function LabSession:_ensureRigIntact(): boolean
+	if self:_rigPreflightOk() then
+		return true
+	end
+	warn("[CargoLab] Rig incomplete at GO; forcing rebuild.")
+	self:_destroyRig()
+	self:_buildRig()
+	local variant = self.runVariant
+	local ok, err = xpcall(function()
+		self.chassisRig:reset()
+		if variant then
+			self.cargoLoad:configure(variant.cargo)
+		end
+		self.cargoLoad:reset()
+		self.chassisRig:setFrozen(true)
+		self.cargoLoad:setFrozen(true)
+		self.stations:reset()
+		if variant then
+			self.director:configure(variant.difficulty)
+		end
+		self.director:reset()
+		self:_assignRoles()
+		self:_applyDriverPaint()
+	end, debug.traceback)
+	if not ok then
+		warn("[CargoLab] Rig rebuild at GO failed.\n" .. tostring(err))
+		return false
+	end
+	return self:_rigPreflightOk()
 end
 
 function LabSession:_destroyRig()
@@ -778,7 +835,32 @@ function LabSession:_assignRoles()
 end
 
 function LabSession:enterStaging()
+	if self.stagingBusy then
+		return
+	end
+	self.stagingBusy = true
+
 	local nextRunNumber = self.runIndex + 1
+	--[[
+		A wreck is not a trustworthy assembly to recycle. Its independently
+		positioned wheel targets can cross FallenPartsDestroyHeight before Result
+		freezes the chassis; reset() correctly skips missing parts, but those same
+		parts are what supply suspension, grip and engine force. That produced a
+		wheel-less second-run truck which said GO and could not move.
+
+		Rebuild after a wreck, cargo loss, a latched simulation error, or any
+		detected wheel/cargo damage. Clean deliveries keep the cheaper in-place
+		reset. Predicate lives in LabRigPolicy for headless coverage.
+	]]
+	local rebuildRig = LabRigPolicy.shouldRebuildRig({
+		outcome = self.outcome,
+		stepFailed = self.stepFailed,
+		hasChassis = self.chassisRig ~= nil,
+		hasCargo = self.cargoLoad ~= nil,
+		wrecked = self.chassisRig ~= nil and self.chassisRig:isWrecked(),
+		wheelsOk = self.chassisRig ~= nil and self.chassisRig:hasCompleteWheelSet(),
+		cargoOk = self.cargoLoad ~= nil and self.cargoLoad:hasCompleteLoad(),
+	})
 	-- A decided board wins. Without one — run one, or a restart that skipped
 	-- the result screen — fall back to the server roll this replaced.
 	self.runVariant = self:_resolveContractBoard()
@@ -806,12 +888,17 @@ function LabSession:enterStaging()
 	self.swapGateIndex = 1
 	self.swapWarningGate = nil
 	self.swapHandoffUntil = 0
+	self.deliveryAccumulator = 0
 	table.clear(self.announcedLandmarks)
 	table.clear(self.driveInputs)
 
 	-- reset() keeps both assemblies frozen through the teleport/reseat so a
 	-- wreck in the void cannot fling parts for a solver frame before freeze.
 	local ok, err = xpcall(function()
+		if rebuildRig then
+			self:_destroyRig()
+			self:_buildRig()
+		end
 		self.chassisRig:reset()
 		self.cargoLoad:configure(variant.cargo)
 		self.cargoLoad:reset()
@@ -828,6 +915,7 @@ function LabSession:enterStaging()
 		self.stepFailed = true
 		warn("[CargoLab] enterStaging failed.\n" .. tostring(err))
 		self:toast("Simulation error. Press R to restart.")
+		self.stagingBusy = false
 		return
 	end
 
@@ -839,6 +927,7 @@ function LabSession:enterStaging()
 			self:_recoverPendingCrew()
 		end
 	end)
+	self.stagingBusy = false
 end
 
 --[[
@@ -889,21 +978,62 @@ function LabSession:_recoverPendingCrew()
 end
 
 function LabSession:enterRun()
+	-- Anything Staging missed (partial destroy during countdown) must not GO.
+	if not self:_ensureRigIntact() then
+		self.stepFailed = true
+		self.phase = "Staging"
+		self:toast("Truck not ready. Press R to reset.")
+		return
+	end
+
 	-- Release both assemblies in the same scheduler turn. setFrozen clears
 	-- velocities before unanchoring, preventing a one-frame launch at GO.
 	self.cargoLoad:setFrozen(false)
 	self.chassisRig:setFrozen(false)
-	self.chassisRig:claimOwnership()
+	local chassisClaimed = self.chassisRig:claimOwnership()
 	self.cargoLoad:claimOwnership()
 	-- Ownership reclaim can drop SeatWelds; reseat before the first drive tick
 	-- so the Driver is Occupant and isOffTruck cannot latch forced braking.
 	if self.stations then
+		if chassisClaimed then
+			self.stations:markOwnershipSettle()
+		end
 		self.stations:recoverAll()
 	end
+	-- Sit can re-grant client ownership; claim again after recoverAll.
+	chassisClaimed = self.chassisRig:claimOwnership()
+	self.cargoLoad:claimOwnership()
+	if chassisClaimed and self.stations then
+		self.stations:markOwnershipSettle()
+	end
+
+	local chassis = self.chassisRig:getChassis()
+	local crate = self.cargoLoad:getCrate()
+	if (chassis and chassis.Anchored) or (crate and crate.Anchored) then
+		self.cargoLoad:setFrozen(false)
+		self.chassisRig:setFrozen(false)
+		chassisClaimed = self.chassisRig:claimOwnership()
+		self.cargoLoad:claimOwnership()
+		if chassisClaimed and self.stations then
+			self.stations:markOwnershipSettle()
+		end
+		chassis = self.chassisRig:getChassis()
+		crate = self.cargoLoad:getCrate()
+	end
+	if (chassis and chassis.Anchored) or (crate and crate.Anchored) then
+		self.stepFailed = true
+		self.chassisRig:setFrozen(true)
+		self.cargoLoad:setFrozen(true)
+		self.phase = "Staging"
+		self:toast("Truck stuck frozen. Press R to reset.")
+		return
+	end
+
 	table.clear(self.driveInputs)
 	self.phase = "Run"
 	self.phaseClock = 0
 	self.runIndex += 1
+	local runIndex = self.runIndex
 	local variant = self.runVariant
 	self.objective = variant.contract.label .. " · " .. variant.contract.brief
 	self.conditionTrend = "Stable"
@@ -927,6 +1057,19 @@ function LabSession:enterRun()
 		opener ..= " Hold E to work it without leaving the wheel."
 	end
 	self:toast(opener)
+
+	-- Mirror deferred seat reclaim: Sit / contact can flip ownership a beat later.
+	task.delay(0.1, function()
+		if self.phase ~= "Run" or self.runIndex ~= runIndex then
+			return
+		end
+		if self.chassisRig and self.chassisRig:claimOwnership() and self.stations then
+			self.stations:markOwnershipSettle()
+		end
+		if self.cargoLoad then
+			self.cargoLoad:claimOwnership()
+		end
+	end)
 end
 
 function LabSession:_finishRun(outcome: string, saved: boolean, crew: { Player }, endCause: string)
@@ -982,10 +1125,20 @@ function LabSession:enterResult(result: string, saved: boolean)
 	if result == "TruckWrecked" and self.chassisRig then
 		self.outcomeCause = self.chassisRig.lastCause
 	end
-	-- Preserve the visible result without letting a falling wreck cross Roblox's
-	-- destruction height during the feedback window. Staging unfreezes both.
+	-- Freeze first, then yank a void wreck back to the start pad. Holding the
+	-- assembly below FallenPartsDestroyHeight for the whole result beat is what
+	-- stripped wheel targets and left the next run unable to drive.
 	self.chassisRig:setFrozen(true)
 	self.cargoLoad:setFrozen(true)
+	if result == "TruckWrecked" or result == "CargoLost" then
+		self.chassisRig:teleport(self.route.startCFrame)
+		self.chassisRig:ensureWheelSet()
+		if self.cargoLoad:hasCompleteLoad() then
+			self.cargoLoad:reseat()
+		end
+		self.chassisRig:setFrozen(true)
+		self.cargoLoad:setFrozen(true)
+	end
 	for _, player in crew do
 		local reward =
 			LabProgressionService.awardRun(player, result, cargoReadout, chassisIntegrity, self.rewardMultiplier)
@@ -1112,27 +1265,42 @@ end
 
 -- -------------------------------------------------------------------- step
 
+--[[
+	Drive/cargo/station integration runs before the physics solver so impulses
+	land on the same frame. Fixed substeps keep push even under hitchy dt.
+]]
+function LabSession:_physicsStep(fixedDt: number)
+	if not self.chassisRig or not self.cargoLoad or not self.stations then
+		return
+	end
+	local input = self:_driveState()
+	self.lastDriveInput = input
+	self.chassisRig:step(fixedDt, input, self.cargoLoad:getMass())
+	self.cargoLoad:step(fixedDt)
+	self.stations:step(fixedDt)
+end
+
 function LabSession:step(dt: number)
 	dt = math.min(dt, MAX_STEP)
 	self.phaseClock += dt
 
 	--[[
-		Seats hand network ownership of the assembly to whoever sat down, which
-		would silently disable every force the chassis applies. Ownership is
-		reclaimed on each seating, and re-checked here in case a seat change
-		slipped past that.
+		Seats can still hand ownership if Auto flips back on. Seating paths
+		reclaim immediately; this is a slow safety poll that only mutates when
+		ownership actually drifted (claimOwnership no-ops otherwise).
 	]]
 	self.ownershipAccumulator += dt
 	if self.ownershipAccumulator >= OWNERSHIP_INTERVAL then
 		self.ownershipAccumulator = 0
-		self.chassisRig:claimOwnership()
-		self.cargoLoad:claimOwnership()
+		if self.chassisRig and self.chassisRig:claimOwnership() and self.stations then
+			self.stations:markOwnershipSettle()
+		end
+		if self.cargoLoad then
+			self.cargoLoad:claimOwnership()
+		end
 	end
 
-	local input = self:_driveState()
-	self.chassisRig:step(dt, input, self.cargoLoad:getMass())
-	self.cargoLoad:step(dt)
-	self.stations:step(dt)
+	local input = self.lastDriveInput or self:_driveState()
 
 	if self.phase == "Run" then
 		self:_recoverPendingCrew()
@@ -1275,10 +1443,15 @@ end
 ]]
 function LabSession:_bindRemotes()
 	self:_track(LabRemotes.bindServer(Net.Names.LabDrive, function(player: Player, drive)
-		if not self.driveLimiter:allow(player) then
+		if self.roles[player.UserId] ~= "Driver" or self.phase ~= "Run" then
 			return
 		end
-		if self.roles[player.UserId] ~= "Driver" or self.phase ~= "Run" then
+		-- Rate-limit drops must not age the last accepted axes into DRIVE_IDLE.
+		if not self.driveLimiter:allow(player) then
+			local previous = self.driveInputs[player.UserId]
+			if previous then
+				previous.at = os.clock()
+			end
 			return
 		end
 
@@ -1403,7 +1576,9 @@ function LabSession:_bindRemotes()
 			if self.phase == "Run" then
 				self:_finishRun("Abandoned", false, self:_crewPlayers(), "SimulationError")
 			end
-			self.stepFailed = false
+			-- Keep stepFailed true through enterStaging so rebuildRig sees it.
+			-- Clearing first left a destroyed crate/wheels on a cheap reset and
+			-- immediately re-latched the same error.
 			self:enterStaging()
 			self:toast(player.Name .. " restarted after an error.")
 			return
@@ -1510,6 +1685,19 @@ function LabSession:_bindRemotes()
 		end
 		self.contractVotes[player.UserId] = vote.choice
 		self:_broadcastSnapshot()
+	end))
+
+	-- The platform owns the invite picker and delivery. This records only that
+	-- our contextual button successfully opened it, which is the part of the
+	-- social funnel this experience controls.
+	self:_track(LabRemotes.bindServer(Net.Names.LabInvite, function(player: Player)
+		if not self.actionLimiter:allow(player) or not self.roles[player.UserId] then
+			return
+		end
+		if self.phase ~= "Result" and self.phase ~= "Staging" then
+			return
+		end
+		self.analytics:invitePrompted(player, self:_activeCrewCount(), self.phase)
 	end))
 
 	--[[
@@ -1649,6 +1837,56 @@ function LabSession:_onPlayerRemoving(player: Player)
 	end)
 end
 
+function LabSession:_haltSimulation(err: any, source: string)
+	self.stepFailed = true
+	-- Halt must freeze assemblies. Otherwise the truck keeps falling
+	-- through the void with stepping no-op'd and parts get Destroy()'d
+	-- before the player can press R.
+	if self.chassisRig then
+		pcall(function()
+			self.chassisRig:setFrozen(true)
+			self.chassisRig:teleport(self.route.startCFrame)
+			self.chassisRig:ensureWheelSet()
+		end)
+	end
+	if self.cargoLoad then
+		pcall(function()
+			if self.cargoLoad:hasCompleteLoad() then
+				self.cargoLoad:reseat()
+			end
+			self.cargoLoad:setFrozen(true)
+		end)
+	end
+	if self.phase == "Run" then
+		self.telemetry:noteSimulationError(source)
+	end
+	warn("[CargoLab] step error, simulation halted. Press R to restart.\n" .. tostring(err))
+	self:toast("Simulation error. Press R to restart.")
+end
+
+function LabSession:_bindStepped()
+	self:_track(RunService.Stepped:Connect(function(_t: number, dt: number)
+		if self.stepFailed then
+			return
+		end
+		local ok, err = xpcall(function()
+			self.physicsAccumulator += math.min(dt, MAX_STEP)
+			local steps = 0
+			while self.physicsAccumulator >= FIXED_DT and steps < MAX_SUBSTEPS do
+				self.physicsAccumulator -= FIXED_DT
+				self:_physicsStep(FIXED_DT)
+				steps += 1
+			end
+			if steps >= MAX_SUBSTEPS then
+				self.physicsAccumulator = 0
+			end
+		end, debug.traceback)
+		if not ok then
+			self:_haltSimulation(err, "stepped_physics")
+		end
+	end))
+end
+
 function LabSession:_bindHeartbeat()
 	--[[
 		A step error is almost always the same error every frame. Warning on
@@ -1666,12 +1904,7 @@ function LabSession:_bindHeartbeat()
 			self:step(dt)
 		end, debug.traceback)
 		if not ok then
-			self.stepFailed = true
-			if self.phase == "Run" then
-				self.telemetry:noteSimulationError("heartbeat_step")
-			end
-			warn("[CargoLab] step error, simulation halted. Press R to restart.\n" .. tostring(err))
-			self:toast("Simulation error. Press R to restart.")
+			self:_haltSimulation(err, "heartbeat_step")
 		end
 	end))
 end
@@ -1697,6 +1930,7 @@ function LabSession:start()
 	end
 
 	self:enterStaging()
+	self:_bindStepped()
 	self:_bindHeartbeat()
 end
 

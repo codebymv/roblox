@@ -39,11 +39,15 @@ local function awardBadge(player: Player, key: string)
 	end
 
 	task.spawn(function()
-		local ok, err = pcall(function()
-			BadgeService:AwardBadge(player.UserId, badge.assetId)
+		local ok, awarded = pcall(function()
+			return BadgeService:AwardBadgeAsync(player.UserId, badge.assetId)
 		end)
 		if not ok then
-			warn("[CargoAchievements] Could not award " .. key .. ": " .. tostring(err))
+			warn("[CargoAchievements] Could not award " .. key .. ": " .. tostring(awarded))
+			return
+		end
+		if not awarded then
+			warn("[CargoAchievements] Roblox did not award " .. key .. " to " .. player.Name)
 			return
 		end
 		PlayerDataService.update(player, function(data)

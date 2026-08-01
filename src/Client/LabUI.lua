@@ -96,6 +96,11 @@ local toastShowing = false
 local safeRoot: Frame? = nil
 local lastOffTruckToastAt = 0
 local chassisMissingFor = 0
+local lastChassisPos: Vector3? = nil
+local lastSentDrive = { throttle = 0, steering = 0, braking = false }
+local lastDriveSendAt = 0
+local DRIVE_FLUSH_SECONDS = 0.05
+local DRIVE_KEEPALIVE_SECONDS = 0.5
 local presented = nil
 local pendingStation: string? = nil
 local pendingStationAt = 0
@@ -187,7 +192,7 @@ local contractCards: { [string]: ContractCardUI } = {}
 local resultQuestion, resultConstraint, feedbackRow
 local phaseBadge, countdownLabel
 local statusFrame, briefFrame, strapPanelFrame, controlsFrame, driveFrame, garageFrame
-local garagePaintName, garageHint, garagePrevious, garageAction, garageNext
+local garagePaintName, garageHint, garageRecords, garagePrevious, garageAction, garageNext
 local controlsTitle, stationRowFrame, actionRowFrame, runLockLabel
 local strapRows: { [string]: any } = {}
 local stationButtons: { [string]: TextButton } = {}
@@ -412,9 +417,12 @@ local function buildInvite(parent: Instance)
 		if not canInvite then
 			return
 		end
-		pcall(function()
+		local opened = pcall(function()
 			SocialService:PromptGameInvite(Players.LocalPlayer)
 		end)
+		if opened then
+			LabRemotes.fireServer(Net.Names.LabInvite, true)
+		end
 	end)
 
 	task.spawn(function()
@@ -585,6 +593,26 @@ local function buildControls(parent: Instance): Frame
 		workButton.BackgroundColor3 = if state then Color3.fromRGB(95, 180, 110) else UIKit.Theme.Positive
 	end
 
+	-- Always notify the server. setWorking(false) no-ops when already false, which
+	-- left a held-E ghost through Result→GO because InputBegan never re-fired.
+	local function releaseWorking()
+		if working then
+			working = false
+			LabRemotes.fireServer(Net.Names.LabWork, false)
+			workButton.BackgroundColor3 = UIKit.Theme.Positive
+		end
+	end
+
+	local function clearDriveLocal()
+		keyForward, keyReverse, keyLeft, keyRight, keyBrake = false, false, false, false, false
+		touchForward, touchReverse, touchLeft, touchRight, touchBrake = false, false, false, false, false
+		padThrottle, padReverse, padSteer, padBrake = 0, 0, 0, false
+	end
+
+	LabUI.setWorking = setWorking
+	LabUI.releaseWorking = releaseWorking
+	LabUI.clearDriveLocal = clearDriveLocal
+
 	UIKit.bindHold(workButton, setWorking)
 
 	switchButton = actionButton(actionRowFrame, "Switch", "T · ROLE", 0.26, 2)
@@ -598,7 +626,6 @@ local function buildControls(parent: Instance): Frame
 		LabRemotes.fireServer(Net.Names.LabRestart)
 	end)
 
-	LabUI.setWorking = setWorking
 	return frame
 end
 
@@ -618,14 +645,35 @@ local function currentDriveInput()
 	}
 end
 
-local function sendDriveInput(forceNeutral: boolean?)
+--[[
+	Gamepad stick Change can exceed the server LabDrive bucket. CAS/touch/keys
+	update local axes; Heartbeat flushes. Discrete Begin/End edges send
+	immediately. Identical payloads are skipped except a keepalive so `at`
+	stays fresh on the server.
+]]
+local function sendDriveInput(forceNeutral: boolean?, forceSend: boolean?)
 	local snap = latest
 	if not snap or snap.myRole ~= "Driver" or snap.phase ~= "Run" or snap.swapActive then
 		return
 	end
 	local drive = if forceNeutral then { throttle = 0, steering = 0, braking = false } else currentDriveInput()
+	local identical = drive.throttle == lastSentDrive.throttle
+		and drive.steering == lastSentDrive.steering
+		and drive.braking == lastSentDrive.braking
+	local now = os.clock()
+	if identical and not forceNeutral and not forceSend then
+		if now - lastDriveSendAt < DRIVE_KEEPALIVE_SECONDS then
+			return
+		end
+	end
 	drive.sentAt = Workspace:GetServerTimeNow()
 	LabRemotes.fireServer(Net.Names.LabDrive, drive)
+	lastSentDrive = {
+		throttle = drive.throttle,
+		steering = drive.steering,
+		braking = drive.braking,
+	}
+	lastDriveSendAt = now
 end
 
 local function buildTouchDrive(parent: Instance): Frame
@@ -661,7 +709,7 @@ local function buildTouchDrive(parent: Instance): Frame
 end
 
 local function buildGarage(parent: Instance)
-	garageFrame = panel(parent, "Garage", UDim2.new(1, -8, 0, GARAGE_TOP), UDim2.fromOffset(300, 126))
+	garageFrame = panel(parent, "Garage", UDim2.new(1, -8, 0, GARAGE_TOP), UDim2.fromOffset(300, 148))
 	garageFrame.AnchorPoint = Vector2.new(1, 0)
 	label(
 		garageFrame,
@@ -699,6 +747,18 @@ local function buildGarage(parent: Instance)
 	)
 	garageHint.TextXAlignment = Enum.TextXAlignment.Center
 	garageHint.TextColor3 = UIKit.Theme.Muted
+	garageRecords = label(
+		garageFrame,
+		"Records",
+		UDim2.fromOffset(10, 122),
+		UDim2.new(1, -20, 0, 16),
+		"NO DELIVERIES YET",
+		10,
+		Enum.Font.GothamBold,
+		true
+	)
+	garageRecords.TextXAlignment = Enum.TextXAlignment.Center
+	garageRecords.TextColor3 = UIKit.Theme.Accent
 
 	garagePrevious.Activated:Connect(function()
 		if #paintDefs == 0 then
@@ -1013,6 +1073,41 @@ local function refreshContractBoard(snap: LabTypes.LabSnapshot, compact: boolean
 	)
 end
 
+local function formatRecordTime(seconds: number): string
+	local whole = math.max(0, math.floor(seconds + 0.5))
+	return string.format("%d:%02d", math.floor(whole / 60), whole % 60)
+end
+
+local function recordValue(records: LabTypes.PersonalRecords?, key: string): string
+	if not records then
+		return ""
+	end
+	if key == "bestConditionPct" then
+		return string.format("%d%%", math.floor(records.bestConditionPct + 0.5))
+	elseif key == "bestTimeSeconds" then
+		return formatRecordTime(records.bestTimeSeconds)
+	elseif key == "bestPayout" then
+		return tostring(math.floor(records.bestPayout + 0.5)) .. " CASH"
+	elseif key == "bestDeliveryStreak" then
+		return tostring(records.bestDeliveryStreak)
+	elseif key == "deliveries" then
+		return tostring(records.deliveries)
+	end
+	return ""
+end
+
+local function recordsSummary(records: LabTypes.PersonalRecords?): string
+	if not records or records.deliveries <= 0 then
+		return "NO DELIVERIES YET"
+	end
+	return string.format(
+		"BEST %s  |  %d%% CARGO  |  STREAK %d",
+		formatRecordTime(records.bestTimeSeconds),
+		math.floor(records.bestConditionPct + 0.5),
+		records.deliveryStreak
+	)
+end
+
 local function resultBody(snap: LabTypes.LabSnapshot): string
 	local lines: { string } = {}
 	if snap.outcome == "TruckWrecked" then
@@ -1041,8 +1136,10 @@ local function resultBody(snap: LabTypes.LabSnapshot): string
 	]]
 	local beaten = snap.recordsBeaten
 	if beaten and #beaten > 0 then
-		local recordName = Achievements.RecordLabel[beaten[1]] or "Record"
-		table.insert(lines, string.upper("NEW BEST · " .. recordName))
+		local key = beaten[1]
+		local recordName = Achievements.RecordLabel[key] or "Record"
+		local value = recordValue(snap.records, key)
+		table.insert(lines, string.upper("NEW BEST | " .. recordName .. (if value ~= "" then " " .. value else "")))
 	end
 
 	table.insert(lines, string.format("Restarting in %ds · Press R to go now", snap.restartSeconds))
@@ -1474,7 +1571,7 @@ refresh = function()
 		"Position",
 		if narrow then UDim2.new(0.5, 0, 0, GARAGE_TOP) else UDim2.new(1, -8, 0, GARAGE_TOP)
 	)
-	UIKit.setSize(garageFrame, UDim2.fromOffset(if narrow then 260 else 300, 126))
+	UIKit.setSize(garageFrame, UDim2.fromOffset(if narrow then 260 else 300, 148))
 	UIKit.setVisible(garageFrame, showGarage)
 	if showGarage then
 		local paint = paintDefs[selectedPaintIndex]
@@ -1506,6 +1603,7 @@ refresh = function()
 						else "Progress saving is temporarily unavailable."
 					else "Driver paint applies to the shared truck."
 			)
+			UIKit.setText(garageRecords, recordsSummary(snap.records))
 		end
 	end
 
@@ -1811,14 +1909,24 @@ local function bindGamepad()
 		local code = input.KeyCode
 		if code == Enum.KeyCode.Thumbstick1 then
 			padSteer = rescaledAxis(input.Position.X)
+			-- Stick Change is high-frequency; Heartbeat flush carries axes.
 		elseif code == Enum.KeyCode.ButtonR2 then
 			padThrottle = if state == Enum.UserInputState.End then 0 else math.clamp(input.Position.Z, 0, 1)
+			if state == Enum.UserInputState.Begin or state == Enum.UserInputState.End then
+				sendDriveInput(false, true)
+			end
 		elseif code == Enum.KeyCode.ButtonL2 then
 			padReverse = if state == Enum.UserInputState.End then 0 else math.clamp(input.Position.Z, 0, 1)
+			if state == Enum.UserInputState.Begin or state == Enum.UserInputState.End then
+				sendDriveInput(false, true)
+			end
 		elseif code == Enum.KeyCode.ButtonX then
-			padBrake = state == Enum.UserInputState.Begin or state == Enum.UserInputState.Change
+			local braking = state == Enum.UserInputState.Begin or state == Enum.UserInputState.Change
+			if braking ~= padBrake then
+				padBrake = braking
+				sendDriveInput(false, true)
+			end
 		end
-		sendDriveInput()
 		return Enum.ContextActionResult.Sink
 	end
 
@@ -1898,10 +2006,12 @@ local function bindInputs()
 	-- events. Release everything explicitly so a background client never keeps
 	-- steering, accelerating, braking, or working a strap for a full timeout.
 	UserInputService.WindowFocusReleased:Connect(function()
-		keyForward, keyReverse, keyLeft, keyRight, keyBrake = false, false, false, false, false
-		touchForward, touchReverse, touchLeft, touchRight, touchBrake = false, false, false, false, false
-		padThrottle, padReverse, padSteer, padBrake = 0, 0, 0, false
-		if working then
+		if LabUI.clearDriveLocal then
+			LabUI.clearDriveLocal()
+		end
+		if LabUI.releaseWorking then
+			LabUI.releaseWorking()
+		elseif working then
 			LabUI.setWorking(false)
 		end
 		sendDriveInput(true)
@@ -1943,7 +2053,8 @@ local function bindCamera()
 		local chassis = findChassis()
 		if not chassis then
 			chassisMissingFor += dt
-			if camera.CameraType == Enum.CameraType.Scriptable then
+			-- Ignore one-frame cache misses; only drop Scriptable after a real gap.
+			if chassisMissingFor > 0.2 and camera.CameraType == Enum.CameraType.Scriptable then
 				camera.CameraType = Enum.CameraType.Custom
 			end
 			local snap = latest
@@ -1959,20 +2070,32 @@ local function bindCamera()
 			return
 		end
 
+		local longGap = chassisMissingFor > 0.2
 		chassisMissingFor = 0
 		camera.CameraType = Enum.CameraType.Scriptable
 
-		-- Follow the truck's heading but never its roll, or a rollover makes
-		-- the viewer motion sick instead of making them laugh.
+		-- Hard-follow an already-interpolated server chassis; extra CFrame lerp
+		-- was rubber-banding behind replication steps.
 		local look = chassis.CFrame.LookVector
 		local flat = Vector3.new(look.X, 0, look.Z)
 		flat = if flat.Magnitude < 0.01 then Vector3.new(0, 0, 1) else flat.Unit
 
 		local focus = chassis.Position + Vector3.new(0, 3, 0)
 		local desired = CFrame.lookAt(focus - flat * 34 + Vector3.new(0, 14, 0), focus)
-		camera.CFrame = camera.CFrame:Lerp(desired, 1 - math.exp(-7 * dt))
+		camera.CFrame = desired
 
-		local speed = chassis.AssemblyLinearVelocity.Magnitude
+		local pos = chassis.Position
+		local speed = 0
+		local previous = lastChassisPos
+		if previous and not longGap and dt > 1e-4 then
+			local distance = (pos - previous).Magnitude
+			local maxFrameDistance = math.max(8, LabConfig.MaxForwardSpeed * dt * 3)
+			if distance <= maxFrameDistance then
+				speed = distance / dt
+			end
+		end
+		lastChassisPos = pos
+
 		local targetFov = 68 + math.clamp(speed / LabConfig.MaxForwardSpeed, 0, 1) * 18
 		camera.FieldOfView += (targetFov - camera.FieldOfView) * math.min(1, dt * 4)
 	end)
@@ -1987,6 +2110,7 @@ function LabUI.mount()
 
 	LabRemotes.onClient(Net.Names.LabSnapshot, function(snap: LabTypes.LabSnapshot)
 		local previousRole = latest and latest.myRole
+		local previousPhase = latest and latest.phase
 		latest = snap
 		if not presented or presented.phase ~= snap.phase then
 			resetPresentation(snap)
@@ -2003,8 +2127,26 @@ function LabUI.mount()
 			pendingRoleAt = 0
 			pendingRoleFrom = nil
 		end
-		if snap.swapActive then
-			working = false
+		-- On phase change / swap / role change: release Work to the server and
+		-- drop sticky drive flags so a held key through Result cannot ghost
+		-- throttle at GO. Do not clear every Staging tick — that would eat a
+		-- held W during the countdown.
+		local phaseChanged = previousPhase ~= nil and previousPhase ~= snap.phase
+		local roleChanged = previousRole ~= nil and previousRole ~= snap.myRole
+		if phaseChanged or roleChanged or snap.swapActive or snap.phase ~= "Run" then
+			if LabUI.releaseWorking then
+				LabUI.releaseWorking()
+			else
+				working = false
+			end
+		end
+		-- Preserve inputs gathered during the countdown when Staging becomes Run.
+		-- InputBegan will not fire again for a key the player is already holding.
+		local leavingRun = previousPhase == "Run" and snap.phase ~= "Run"
+		if leavingRun or roleChanged or snap.swapActive then
+			if LabUI.clearDriveLocal then
+				LabUI.clearDriveLocal()
+			end
 		end
 		if snap.feedbackSubmitted or not snap.feedbackRequested then
 			feedbackPending = false
@@ -2014,14 +2156,6 @@ function LabUI.mount()
 		if paintPending and selectedPaint and snap.equippedPaint == selectedPaint.id then
 			paintPending = false
 			paintPendingAt = 0
-		end
-		if previousRole ~= nil and snap.myRole ~= previousRole then
-			working = false
-			keyForward, keyReverse, keyLeft, keyRight, keyBrake = false, false, false, false, false
-			touchForward, touchReverse, touchLeft, touchRight, touchBrake = false, false, false, false, false
-			padThrottle, padReverse, padSteer, padBrake = 0, 0, 0, false
-		elseif working and snap.phase ~= "Run" then
-			working = false
 		end
 		refresh()
 	end)
@@ -2064,7 +2198,7 @@ function LabUI.mount()
 		stepPresentation(dt)
 
 		driveAccumulator += dt
-		if driveAccumulator < 0.06 then
+		if driveAccumulator < DRIVE_FLUSH_SECONDS then
 			return
 		end
 		driveAccumulator = 0

@@ -10,13 +10,18 @@
 	position and steering axis, and integrates spin every render frame.
 ]]
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
+
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local LabConfig = require(Shared:WaitForChild("LabConfig"))
 
 local WHEEL_IDS = { "FL", "FR", "RL", "RR" }
 local POSITION_RATE = 24
 local STEERING_RATE = 28
 local TARGET_REFRESH_SECONDS = 0.25
+local REBUILD_DEBOUNCE_SECONDS = 0.15
 local FULL_TURN = 2 * math.pi
 
 type WheelVisual = {
@@ -82,6 +87,8 @@ function WheelPresentation.mount()
 	local chassis: BasePart? = nil
 	local visuals: { [string]: WheelVisual } = {}
 	local refreshAt = 0
+	local lastRebuildAt = 0
+	local lastBodyPos: Vector3? = nil
 
 	local function clearVisuals()
 		for _, visual in visuals do
@@ -94,12 +101,15 @@ function WheelPresentation.mount()
 		end
 		table.clear(visuals)
 		folder:ClearAllChildren()
+		lastBodyPos = nil
 	end
 
 	local function rebuild(truck: Model, body: BasePart)
 		clearVisuals()
 		currentTruck = truck
 		chassis = body
+		lastRebuildAt = os.clock()
+		lastBodyPos = body.Position
 
 		for _, id in WHEEL_IDS do
 			local source = truck:FindFirstChild("Wheel" .. id)
@@ -153,7 +163,23 @@ function WheelPresentation.mount()
 
 	RunService.RenderStepped:Connect(function(dt: number)
 		local now = os.clock()
-		if now >= refreshAt then
+		local needsRefresh = now >= refreshAt
+		if not needsRefresh then
+			if
+				currentTruck
+				and (not currentTruck.Parent or not chassis or not chassis.Parent or rigNeedsRebuild(currentTruck))
+			then
+				needsRefresh = true
+			else
+				for _, visual in visuals do
+					if not visual.source.Parent then
+						needsRefresh = true
+						break
+					end
+				end
+			end
+		end
+		if needsRefresh then
 			refreshAt = now + TARGET_REFRESH_SECONDS
 			local foundTruck, foundChassis = findRig()
 			if
@@ -162,7 +188,10 @@ function WheelPresentation.mount()
 				or (foundTruck ~= nil and rigNeedsRebuild(foundTruck))
 			then
 				if foundTruck and foundChassis then
-					rebuild(foundTruck, foundChassis)
+					local identityChanged = foundTruck ~= currentTruck or foundChassis ~= chassis
+					if identityChanged or now - lastRebuildAt >= REBUILD_DEBOUNCE_SECONDS then
+						rebuild(foundTruck, foundChassis)
+					end
 				else
 					clearVisuals()
 					currentTruck = nil
@@ -178,7 +207,22 @@ function WheelPresentation.mount()
 
 		local positionAlpha = 1 - math.exp(-POSITION_RATE * dt)
 		local steeringAlpha = 1 - math.exp(-STEERING_RATE * dt)
-		local forwardSpeed = body.AssemblyLinearVelocity:Dot(body.CFrame.LookVector)
+		-- Server-owned assemblies often expose sparse AssemblyLinearVelocity on
+		-- the client; position delta matches the interpolated chassis motion.
+		local bodyPos = body.Position
+		local forwardSpeed = 0
+		local previousPos = lastBodyPos
+		if previousPos and dt > 1e-4 then
+			local delta = bodyPos - previousPos
+			-- A reset teleports the same truck back to the start, so lifecycle
+			-- invalidation cannot catch it by model identity. Treat distances no
+			-- physically plausible frame can cover as a new motion sample.
+			local maxFrameDistance = math.max(8, LabConfig.MaxForwardSpeed * dt * 3)
+			if delta.Magnitude <= maxFrameDistance then
+				forwardSpeed = delta:Dot(body.CFrame.LookVector) / dt
+			end
+		end
+		lastBodyPos = bodyPos
 
 		for _, visual in visuals do
 			if not visual.source.Parent then

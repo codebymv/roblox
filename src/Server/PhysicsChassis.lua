@@ -396,50 +396,14 @@ function PhysicsChassis:_build()
 		server updates never fight chassis interpolation. Making them real physics
 		wheels would add constraint tuning without improving the handling model.
 	]]
+	-- _createWheel reads these fields, so publish the freshly built assembly
+	-- before asking the wheel factory to attach its targets.
+	self.model = model
+	self.chassis = chassis
+	self.cab = cab
+	self.anchors = anchors
 	for _, id in WHEEL_ORDER do
-		local offset = LabConfig.WheelOffsets[id]
-		local wheel = Instance.new("Part")
-		wheel.Name = "Wheel" .. id
-		wheel.Shape = Enum.PartType.Cylinder
-		wheel.Size = Vector3.new(LabConfig.WheelWidth, LabConfig.WheelRadius * 2, LabConfig.WheelRadius * 2)
-		wheel.Color = Color3.fromRGB(22, 22, 24)
-		wheel.Material = Enum.Material.Rubber
-		wheel.Anchored = true
-		wheel.CanCollide = false
-		wheel.CanQuery = false
-		-- Client WheelPresentation draws the visible tyre; keep the server target
-		-- invisible so a halted step never shows orphaned rubber floating mid-air.
-		wheel.Transparency = 1
-		wheel.CFrame = self:_mountWheelVisual(chassis.CFrame, offset, id == "FL" or id == "FR", 0)
-		wheel.Parent = model
-
-		local hub = Instance.new("Part")
-		hub.Name = "Hub"
-		hub.Shape = Enum.PartType.Cylinder
-		hub.Size = Vector3.new(LabConfig.WheelWidth + 0.08, LabConfig.HubRadius * 2, LabConfig.HubRadius * 2)
-		hub.Color = Color3.fromRGB(175, 180, 186)
-		hub.Material = Enum.Material.Metal
-		hub.Anchored = true
-		hub.CanCollide = false
-		hub.CanQuery = false
-		hub.Massless = true
-		hub.Transparency = 1
-		hub.CFrame = wheel.CFrame
-		hub.Parent = wheel
-
-		self.wheels[id] = {
-			id = id,
-			offset = offset,
-			part = wheel,
-			hub = hub,
-			steer = id == "FL" or id == "FR",
-			drive = id == "RL" or id == "RR",
-			grounded = false,
-			compression = 0,
-			normalForce = 0,
-			surface = "Road",
-			spin = 0,
-		}
+		self:_createWheel(id)
 	end
 
 	local rayParams = RaycastParams.new()
@@ -447,13 +411,90 @@ function PhysicsChassis:_build()
 	rayParams.IgnoreWater = true
 	rayParams.FilterDescendantsInstances = { model }
 
-	self.model = model
-	self.chassis = chassis
-	self.cab = cab
-	self.anchors = anchors
 	self.rayParams = rayParams
 
 	self:claimOwnership()
+end
+
+function PhysicsChassis:_createWheel(id: string)
+	local model = self.model
+	local chassis = self.chassis
+	if not model or not chassis then
+		return
+	end
+
+	local existing = self.wheels[id]
+	if existing then
+		if existing.part and existing.part.Parent then
+			existing.part:Destroy()
+		end
+		self.wheels[id] = nil
+	end
+	local stale = model:FindFirstChild("Wheel" .. id)
+	if stale then
+		stale:Destroy()
+	end
+
+	local offset = LabConfig.WheelOffsets[id]
+	local wheel = Instance.new("Part")
+	wheel.Name = "Wheel" .. id
+	wheel.Shape = Enum.PartType.Cylinder
+	wheel.Size = Vector3.new(LabConfig.WheelWidth, LabConfig.WheelRadius * 2, LabConfig.WheelRadius * 2)
+	wheel.Color = Color3.fromRGB(22, 22, 24)
+	wheel.Material = Enum.Material.Rubber
+	wheel.Anchored = true
+	wheel.CanCollide = false
+	wheel.CanQuery = false
+	-- Client WheelPresentation draws the visible tyre; keep the server target
+	-- invisible so a halted step never shows orphaned rubber floating mid-air.
+	wheel.Transparency = 1
+	wheel.CFrame = self:_mountWheelVisual(chassis.CFrame, offset, id == "FL" or id == "FR", 0)
+	wheel.Parent = model
+
+	local hub = Instance.new("Part")
+	hub.Name = "Hub"
+	hub.Shape = Enum.PartType.Cylinder
+	hub.Size = Vector3.new(LabConfig.WheelWidth + 0.08, LabConfig.HubRadius * 2, LabConfig.HubRadius * 2)
+	hub.Color = Color3.fromRGB(175, 180, 186)
+	hub.Material = Enum.Material.Metal
+	hub.Anchored = true
+	hub.CanCollide = false
+	hub.CanQuery = false
+	hub.Massless = true
+	hub.Transparency = 1
+	hub.CFrame = wheel.CFrame
+	hub.Parent = wheel
+
+	self.wheels[id] = {
+		id = id,
+		offset = offset,
+		part = wheel,
+		hub = hub,
+		steer = id == "FL" or id == "FR",
+		drive = id == "RL" or id == "RR",
+		grounded = false,
+		compression = 0,
+		normalForce = 0,
+		surface = "Road",
+		spin = 0,
+	}
+	self.suspensionHealth[id] = self.suspensionHealth[id] or 1
+end
+
+-- Recreate any suspension targets Roblox stripped after a void fall.
+function PhysicsChassis:ensureWheelSet(): boolean
+	local repaired = false
+	for _, id in WHEEL_ORDER do
+		local wheel = self.wheels[id]
+		if not wheel or not wheel.part or not wheel.part.Parent or not wheel.hub or not wheel.hub.Parent then
+			self:_createWheel(id)
+			repaired = true
+		end
+	end
+	if repaired then
+		self:_snapWheelVisuals()
+	end
+	return repaired
 end
 
 --[[
@@ -462,16 +503,28 @@ end
 	truck therefore has to take ownership back after anyone sits down, and the
 	run loop re-asserts it on a timer in case a seat change is missed.
 ]]
-function PhysicsChassis:claimOwnership()
+--[[
+	Returns true when ownership actually changed. Callers use that to start the
+	SeatWeld settle grace so soft reseat does not immediately fight the reclaim.
+]]
+function PhysicsChassis:claimOwnership(): boolean
 	local chassis = self.chassis
-	if not chassis or not chassis.Parent or chassis.Anchored then
-		return
+	-- Anchored parts still accept SetNetworkOwner on the server; Staging ticks
+	-- used to no-op while frozen and left client ownership stuck after GO.
+	if not chassis or not chassis.Parent then
+		return false
 	end
+	local mutated = false
 	pcall(function()
-		if chassis:GetNetworkOwnershipAuto() or chassis:GetNetworkOwner() ~= nil then
+		local auto = chassis:GetNetworkOwnershipAuto()
+		local owner = chassis:GetNetworkOwner()
+		if auto or owner ~= nil then
+			-- Pin server ownership so Sit cannot keep flipping Auto back mid-run.
 			chassis:SetNetworkOwner(nil)
+			mutated = true
 		end
 	end)
+	return mutated
 end
 
 function PhysicsChassis:setIgnoreList(instances: { Instance })
@@ -792,6 +845,13 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 	if chassis.Position.Y < LabConfig.VoidY then
 		self.wrecked = true
 		self.lastCause = RunCauses.Wreck.Fell
+		-- Freeze and yank back immediately. Leaving the assembly in the void for
+		-- the Result beat lets Roblox destroy unanchored body parts (and any
+		-- wheel targets that followed them) before Staging can rebuild — that is
+		-- the wheel-less second-run truck.
+		self:setFrozen(true)
+		self:teleport(self.route.startCFrame)
+		self:ensureWheelSet()
 	end
 end
 
@@ -847,6 +907,20 @@ end
 
 function PhysicsChassis:getWheels()
 	return self.wheels
+end
+
+-- The raycast targets are also the authority for suspension, grip and drive
+-- force. Roblox may remove them if a wreck carries them below the destruction
+-- height before Result freezes the chassis. A truck with even one missing
+-- target is not safe to reuse for another run.
+function PhysicsChassis:hasCompleteWheelSet(): boolean
+	for _, id in WHEEL_ORDER do
+		local wheel = self.wheels[id]
+		if not wheel or not wheel.part or not wheel.part.Parent or not wheel.hub or not wheel.hub.Parent then
+			return false
+		end
+	end
+	return true
 end
 
 function PhysicsChassis:_snapWheelVisuals()
@@ -922,6 +996,7 @@ function PhysicsChassis:reset()
 	-- Stay frozen across the teleport. Unfreezing a wreck mid-void for even one
 	-- solver step is what flings hubs, seats, and the load across the sky.
 	self:setFrozen(true)
+	self:ensureWheelSet()
 	self:teleport(self.route.startCFrame)
 
 	self.steerAngle = 0

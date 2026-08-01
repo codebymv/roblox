@@ -109,6 +109,10 @@ local validators: { [string]: (any) -> any } = {
 		return {}
 	end,
 
+	[Net.Names.LabInvite] = function(): EmptyPayload
+		return {}
+	end,
+
 	[Net.Names.LabFeedback] = function(payload: any): FeedbackPayload?
 		if payload ~= "Yes" and payload ~= "Maybe" and payload ~= "No" then
 			return nil

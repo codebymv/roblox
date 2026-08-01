@@ -82,6 +82,7 @@ local function checkShared()
 	assert(LabRemotes.validate(Net.Names.LabContractVote, "risky") == nil, "Choices must be case-sensitive")
 	assert(LabRemotes.validate(Net.Names.LabContractVote, "Bank") == nil, "An unknown choice must be rejected")
 	assert(LabRemotes.validate(Net.Names.LabContractVote, 1) == nil, "A non-string choice must be rejected")
+	assert(LabRemotes.validate(Net.Names.LabInvite, true), "Invite prompt telemetry was rejected")
 
 	local paint = LabRemotes.validate(Net.Names.LabPaint, "DepotGrey")
 	assert(paint and paint.paintId == "DepotGrey", "Known paint was rejected")
@@ -165,9 +166,7 @@ local function checkFunTest()
 		assert(wheel.Anchored and not wheel.CanCollide, "Wheel " .. id .. " must remain a visual target")
 		local hub = wheel:FindFirstChild("Hub")
 		assert(hub and hub:IsA("BasePart"), "Missing wheel hub " .. id)
-		assert(not hub.Anchored and hub.Massless, "Wheel hub " .. id .. " must follow without adding physics mass")
-		local hubWeld = wheel:FindFirstChildOfClass("WeldConstraint")
-		assert(hubWeld and hubWeld.Part0 == wheel and hubWeld.Part1 == hub, "Wheel hub " .. id .. " is not welded")
+		assert(hub.Anchored and hub.Massless, "Wheel hub " .. id .. " must remain a visual target")
 		if session.phase == "Staging" then
 			local offset = LabConfig.WheelOffsets[id]
 			local expectedDrop = LabConfig.SuspensionRestLength * (1 - LabConfig.SuspensionStaticCompression)
@@ -182,6 +181,7 @@ local function checkFunTest()
 		end
 		assert(chassis:FindFirstChild("Strap_" .. id), "Missing strap anchor " .. id)
 	end
+	assert(session.chassisRig:hasCompleteWheelSet(), "Truck is missing a wheel or hub authority")
 
 	local crate = lab:FindFirstChild("Crate")
 	assert(crate and crate:IsA("BasePart"), "Crate missing")

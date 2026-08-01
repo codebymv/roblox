@@ -259,16 +259,25 @@ function LabSFX.mount()
 			lastCountdown = -1
 		end
 
-		for index, strap in snap.straps do
-			local wasBroken = previousStraps[strap.id]
-			if wasBroken ~= nil and snap.phase == "Run" then
-				if not wasBroken and strap.broken then
-					play(chooseVariant("StrapSnap1", "StrapSnap2", index + math.floor(snap.timeRemaining)), "strap")
-				elseif wasBroken and not strap.broken then
-					play(chooseVariant("StrapRefit1", "StrapRefit2", index + math.floor(snap.timeRemaining)), "strap")
+		-- Reset strap memory outside Run so a Staging heal after a wreck does
+		-- not fire a false StrapRefit one-shot on the next GO.
+		if snap.phase ~= "Run" then
+			table.clear(previousStraps)
+		else
+			for index, strap in snap.straps do
+				local wasBroken = previousStraps[strap.id]
+				if wasBroken ~= nil then
+					if not wasBroken and strap.broken then
+						play(chooseVariant("StrapSnap1", "StrapSnap2", index + math.floor(snap.timeRemaining)), "strap")
+					elseif wasBroken and not strap.broken then
+						play(
+							chooseVariant("StrapRefit1", "StrapRefit2", index + math.floor(snap.timeRemaining)),
+							"strap"
+						)
+					end
 				end
+				previousStraps[strap.id] = strap.broken
 			end
-			previousStraps[strap.id] = strap.broken
 		end
 
 		previous = snap
@@ -363,7 +372,10 @@ function LabSFX.mount()
 
 		local drive = loops.EngineDriveLoop
 		if drive then
-			drive.sound.PlaybackSpeed = 0.86 + speedMix * 0.34
+			-- Snapshot speed is 10 Hz; hard-assigning pitch stair-steps RPM.
+			local pitchTarget = 0.86 + speedMix * 0.34
+			local pitchAlpha = 1 - math.exp(-FADE_SPEED * dt)
+			drive.sound.PlaybackSpeed += (pitchTarget - drive.sound.PlaybackSpeed) * pitchAlpha
 		end
 	end)
 end

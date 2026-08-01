@@ -101,7 +101,10 @@ function CargoLoad:_build()
 	crate.Anchored = false
 	crate.CanCollide = true
 	crate.CustomPhysicalProperties = PhysicalProperties.new(LabConfig.CrateDensity, 0.55, 0.05, 2, 1)
-	crate.Parent = self.parent
+	-- Parent under the truck so PivotTo / void yank moves the crate with the
+	-- model. Keep it unwelded — ropes alone connect it to the chassis assembly.
+	local truck = self.chassisRig:getModel()
+	crate.Parent = truck
 
 	for _, id in LabConfig.StrapOrder do
 		local corner = LabConfig.StrapCrateLocal[id]
@@ -114,7 +117,7 @@ function CargoLoad:_build()
 		bracket.CanCollide = false
 		bracket.Massless = true
 		bracket.CFrame = crate.CFrame * CFrame.new(corner)
-		bracket.Parent = self.parent
+		bracket.Parent = truck
 
 		local bracketWeld = Instance.new("WeldConstraint")
 		bracketWeld.Part0 = crate
@@ -203,7 +206,7 @@ function CargoLoad:_buildVariantDetails(variant)
 	end
 	local model = Instance.new("Model")
 	model.Name = "CargoDetails"
-	model.Parent = self.parent
+	model.Parent = self.chassisRig:getModel()
 	self.variantModel = model
 
 	local size = self.crate.Size
@@ -338,16 +341,22 @@ end
 	Keeping it on the server is what stops the load being in a different place
 	for every player.
 ]]
-function CargoLoad:claimOwnership()
+function CargoLoad:claimOwnership(): boolean
 	local crate = self.crate
-	if not crate or not crate.Parent or crate.Anchored then
-		return
+	-- Same as chassis: reclaim even while Anchored so Staging ownership ticks work.
+	if not crate or not crate.Parent then
+		return false
 	end
+	local mutated = false
 	pcall(function()
-		if crate:GetNetworkOwnershipAuto() or crate:GetNetworkOwner() ~= nil then
+		local auto = crate:GetNetworkOwnershipAuto()
+		local owner = crate:GetNetworkOwner()
+		if auto or owner ~= nil then
 			crate:SetNetworkOwner(nil)
+			mutated = true
 		end
 	end)
+	return mutated
 end
 
 --[[
@@ -815,8 +824,35 @@ function CargoLoad:setFrozen(frozen: boolean)
 	end
 end
 
+-- Same class of failure as missing wheels: a void fall can Destroy() the crate
+-- while Staging still tries to reset straps against a nil Parent.
+function CargoLoad:hasCompleteLoad(): boolean
+	if not self.crate or not self.crate.Parent then
+		return false
+	end
+	if not self.pallet or not self.pallet.Parent then
+		return false
+	end
+	for _, id in LabConfig.StrapOrder do
+		local strap = self.straps[id]
+		if
+			not strap
+			or not strap.railAttachment
+			or not strap.railAttachment.Parent
+			or not strap.crateAttachment
+			or not strap.crateAttachment.Parent
+		then
+			return false
+		end
+	end
+	return true
+end
+
 function CargoLoad:reset()
 	-- Reseat while frozen so the crate cannot free-fall between place and freeze.
+	if not self:hasCompleteLoad() then
+		error("CargoLoad:reset requires an intact crate/pallet/straps; rebuild the rig")
+	end
 	self:setFrozen(true)
 	self:reseat()
 

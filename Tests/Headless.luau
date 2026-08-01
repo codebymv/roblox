@@ -76,6 +76,7 @@ local PresentationMath = loadShared("PresentationMath")
 local CrewRotation = loadShared("CrewRotation")
 local LabProgression = loadShared("LabProgression")
 local LabRespawnPolicy = loadShared("LabRespawnPolicy")
+local LabRigPolicy = loadShared("LabRigPolicy")
 local RunVariants = loadShared("RunVariants")
 local RouteMath = loadShared("RouteMath")
 local RunCauses = loadShared("RunCauses")
@@ -694,6 +695,78 @@ check("respawns never attach to a wreck or result-phase truck", function()
 	assert(LabRespawnPolicy.shouldAttach("Staging", false, 0, -200), "Safe staging truck rejected a respawn")
 	assert(LabRespawnPolicy.shouldAttach("Run", false, 0, -200), "Safe mid-run truck rejected a respawn")
 	assert(LabRespawnPolicy.shouldAttach("Staging", false, -175, -200), "Staging truck above void buffer rejected")
+end)
+
+check("staging rebuilds after wreck, cargo loss, step fail, or incomplete rig", function()
+	assert(
+		LabRigPolicy.shouldRebuildRig({
+			outcome = "TruckWrecked",
+			stepFailed = false,
+			hasChassis = true,
+			hasCargo = true,
+			wrecked = false,
+			wheelsOk = true,
+			cargoOk = true,
+		}),
+		"TruckWrecked must rebuild"
+	)
+	assert(
+		LabRigPolicy.shouldRebuildRig({
+			outcome = "CargoLost",
+			stepFailed = false,
+			hasChassis = true,
+			hasCargo = true,
+			wrecked = false,
+			wheelsOk = true,
+			cargoOk = true,
+		}),
+		"CargoLost must rebuild"
+	)
+	assert(
+		LabRigPolicy.shouldRebuildRig({
+			outcome = "Delivered",
+			stepFailed = true,
+			hasChassis = true,
+			hasCargo = true,
+			wrecked = false,
+			wheelsOk = true,
+			cargoOk = true,
+		}),
+		"stepFailed must rebuild"
+	)
+	assert(
+		LabRigPolicy.shouldRebuildRig({
+			outcome = "Delivered",
+			stepFailed = false,
+			hasChassis = true,
+			hasCargo = true,
+			wrecked = false,
+			wheelsOk = false,
+			cargoOk = true,
+		}),
+		"Incomplete wheels must rebuild"
+	)
+	assert(
+		LabRigPolicy.shouldRebuildRig({
+			outcome = "Delivered",
+			stepFailed = false,
+			hasChassis = true,
+			hasCargo = true,
+			wrecked = false,
+			wheelsOk = true,
+			cargoOk = false,
+		}),
+		"Incomplete cargo must rebuild"
+	)
+	assert(not LabRigPolicy.shouldRebuildRig({
+		outcome = "Delivered",
+		stepFailed = false,
+		hasChassis = true,
+		hasCargo = true,
+		wrecked = false,
+		wheelsOk = true,
+		cargoOk = true,
+	}), "Clean delivery must keep in-place reset")
 end)
 
 check("cargo offset thresholds are strictly increasing", function()
