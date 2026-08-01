@@ -1,5 +1,12 @@
 # Core Fun Audit v0
 
+> **Historical diagnosis, not a description of the current build.** This audit
+> was written against the retired Depot runtime before the physics-first
+> `FunTest` rebuild. Its findings explain why that rebuild happened; claims
+> about solo play, role activity, cargo physics, and the active session loop
+> should not be used to assess the current game. For current behaviour, start
+> with the root [README](../README.md) and [PlaytestProtocol_V0.md](PlaytestProtocol_V0.md).
+
 Written before any code changed, against commit state of `main` at the time of the
 Core-Fun Recovery pass. The purpose is to answer one question honestly:
 

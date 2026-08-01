@@ -19,7 +19,9 @@ mentioning the garage so progression does not masquerade as core fun.
 2. Build profiles are automatic. Studio uses `Development`; every published
    server uses `Release`, which disables the debug overlay, live tuning,
    developer commands, verbose physics, and Studio-only run artifacts. Server
-   startup fails closed if a future change makes that profile unsafe.
+   startup fails closed if a future change makes that profile unsafe. Roblox
+   Beta Mode is a dashboard distribution setting, not a third code profile;
+   published beta servers use this same `Release` profile.
 3. The place and server crew caps both remain `4`: one Driver and three
    Strappers. Roblox rejects a fifth join; the in-session spectator queue is a
    defensive fallback for oversized Studio tests and failed seat attachment.
@@ -39,6 +41,10 @@ Studio, temporarily set `FORCE_PROFILE` in `DevConfig.lua` to `"Release"`.
 Four players. One drives, three work the bed. Anyone can press `T` to hand over
 or take the wheel between runs, and you want them to, because "would you choose
 a non-driver role?" is one of the questions being tested.
+
+Use Roblox platform chat/voice or a shared Discord call for facilitated tests.
+Do not add a bespoke communication system before observing whether platform
+communication and the game's physical tells are insufficient.
 
 With two or more crew, the red `SWAP` signs force a deterministic rotation.
 Do not explain the order before the first run. Observe whether the personalized
@@ -106,6 +112,7 @@ The server log prints a block per run. The lines that matter:
 | `recoveries` | 1 or more | Failures are binary, not recoverable |
 | `station moves` | 4 or more per crew member | The Strapper is passive |
 | `crew swaps` | 2 on a complete 2+ player run | A gate was skipped or failed |
+| `drive input age` | Record the baseline beside any handling complaint | Separates network delay from truck or road tuning; inspect the >=200ms tail |
 | `idle` per crew member | under 25% of run | That role is not a role |
 | `designed cascade` | true | The opener is not landing |
 | `emergent cascade` | true on most runs | Systems are not interacting |
@@ -120,8 +127,13 @@ does not. The onboarding funnel is `Joined Game` → `Crew Seat Assigned` →
 `First Crew Input` → `First Run Finished` → `Second Run Started`. Custom events
 record crew size, time to first input and crisis, outcomes, run and session
 duration, SWAP gates, mid-run departures, and the once-per-session
-`Yes`/`Maybe`/`No` replay answer. Roblox aggregates these daily, so allow up to
-24 hours before treating an empty dashboard as a wiring failure.
+`Yes`/`Maybe`/`No` replay answer. Each finished run also emits a compact summary:
+progress, cargo and chassis condition, breaks/refits, recoveries, throws, swaps,
+manual resets, simulation errors, and aggregate client-to-server drive-input
+age. Outcome, crew size, and run variant are attached as breakdown fields. No
+player names, raw timeline, or high-frequency input stream leaves the server.
+Roblox aggregates these events daily, so allow up to 24 hours before treating an
+empty dashboard as a wiring failure.
 
 ### Progression smoke test
 

@@ -30,6 +30,7 @@ type Row = {
 
 local player = Players.LocalPlayer
 local gui: ScreenGui
+local root: Frame
 local panel: Frame
 local scroller: ScrollingFrame
 local toggleButton: TextButton
@@ -269,7 +270,7 @@ local function buildPanel()
 		BackgroundTransparency = 0.06,
 		Visible = false,
 		CornerRadius = 14,
-		Parent = gui,
+		Parent = root,
 	})
 
 	local constraint = Instance.new("UISizeConstraint")
@@ -395,6 +396,7 @@ end
 function DepotUI.mount()
 	gui = UIKit.screen("CargoCatastropheDepot", player:WaitForChild("PlayerGui"))
 	gui.DisplayOrder = 25
+	root = UIKit.safeArea(gui)
 
 	requestJoinRemote = Net.get(Net.Names.RequestJoinBay)
 	requestLeaveRemote = Net.get(Net.Names.RequestLeaveBay)
@@ -413,7 +415,7 @@ function DepotUI.mount()
 		TextColor3 = Color3.new(1, 1, 1),
 		Text = "DEPOT",
 		CornerRadius = 10,
-		Parent = gui,
+		Parent = root,
 	})
 
 	buildPanel()

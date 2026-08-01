@@ -6,6 +6,14 @@
 ]]
 
 return {
+	-- LabMusic starts on the first cue, then picks a different cue at random
+	-- for each crossfade (never the same track twice in a row).
+	-- OstLoop is kept as an alias of the first cue for older call sites.
+	OstTracks = {
+		"rbxassetid://122768801108112", -- cargo_ost
+		"rbxassetid://98660810477229", -- cargo_ost2
+		"rbxassetid://135309223240228", -- cargo_ost3
+	},
 	OstLoop = "rbxassetid://122768801108112",
 
 	Sfx = {

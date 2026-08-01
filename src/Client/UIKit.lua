@@ -120,6 +120,7 @@ function UIKit.horizontalRow(parent: Instance, name: string, height: number): Fr
 	row.Name = name
 	row.BackgroundTransparency = 1
 	row.BorderSizePixel = 0
+	row.ClipsDescendants = true
 	row.Size = UDim2.new(1, 0, 0, height)
 	row.Parent = parent
 
@@ -128,11 +129,12 @@ function UIKit.horizontalRow(parent: Instance, name: string, height: number): Fr
 	layout.SortOrder = Enum.SortOrder.LayoutOrder
 	layout.Padding = UDim.new(0, 6)
 	layout.VerticalAlignment = Enum.VerticalAlignment.Center
+	layout.HorizontalFlex = Enum.UIFlexAlignment.Fill
 	layout.Parent = row
 
 	local pad = Instance.new("UIPadding")
-	pad.PaddingLeft = UDim.new(0, 12)
-	pad.PaddingRight = UDim.new(0, 12)
+	pad.PaddingLeft = UDim.new(0, 10)
+	pad.PaddingRight = UDim.new(0, 10)
 	pad.Parent = row
 
 	return row
@@ -253,6 +255,7 @@ function UIKit.panel(props: { [string]: any }?): Frame
 	frame.BackgroundColor3 = Theme.Panel
 	frame.BackgroundTransparency = Theme.PanelTransparency
 	frame.BorderSizePixel = 0
+	frame.ClipsDescendants = true
 	apply(frame, props)
 	UIKit.corner(frame, props and props.CornerRadius or Theme.PanelCorner)
 	return frame

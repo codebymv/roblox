@@ -3,9 +3,10 @@
 --[[
 	The smallest thing that answers the go/no-go questions.
 
-	No analytics platform, no DataStore, no schema. An in-memory event list per
-	run and a summary printed to the server log when the run ends, which is
-	readable straight out of the Studio output window during a playtest.
+	Development keeps an in-memory event list, prints it at run end, and may
+	write a Studio artifact. The same counters also produce an anonymous compact
+	summary for published AnalyticsService events; raw events and input samples
+	never leave the server.
 
 	The metrics exist to catch the two failure modes the design is most at risk
 	of: a role that never acts, and a run where nothing physically happened.
@@ -21,7 +22,7 @@ local DevConfig = require(Shared:WaitForChild("DevConfig"))
 local TuningService = require(script.Parent.TuningService)
 
 local ARTIFACT_FOLDER = "LabRuns"
-local ARTIFACT_SCHEMA = 1
+local ARTIFACT_SCHEMA = 2
 
 -- Roughly five minutes at the sample rate below. A guard against a run that is
 -- left going, not an expected limit.
@@ -51,12 +52,47 @@ function LabTelemetry:reset()
 	self.throws = 0
 	self.crewSwaps = 0
 	self.pressureEvents = 0
+	self.manualResets = 0
+	self.simulationErrors = 0
+	self.driveInputAgeSamples = 0
+	self.driveInputAgeTotal = 0
+	self.driveInputAgeMax = 0
+	self.driveInputAgeOver200 = 0
+	self.driveInputAgeOver400 = 0
 	self.firstInputAt = nil
 	self.firstMovementAt = nil
 	self.firstCrisisAt = nil
 	self.designedCascade = false
 	self.emergentCascade = false
 	self.worstCondition = "Secure"
+end
+
+-- Client timestamps use Workspace:GetServerTimeNow(), so they share the
+-- server's clock. We retain only aggregate age: published servers never store
+-- the raw input stream or a per-player latency history.
+function LabTelemetry:noteDriveInputAge(seconds: number)
+	if not DevConfig.Telemetry or seconds < 0 or seconds > 10 then
+		return
+	end
+	self.driveInputAgeSamples += 1
+	self.driveInputAgeTotal += seconds
+	self.driveInputAgeMax = math.max(self.driveInputAgeMax, seconds)
+	if seconds >= 0.2 then
+		self.driveInputAgeOver200 += 1
+	end
+	if seconds >= 0.4 then
+		self.driveInputAgeOver400 += 1
+	end
+end
+
+function LabTelemetry:noteManualReset()
+	self.manualResets += 1
+	self:log("manual_reset")
+end
+
+function LabTelemetry:noteSimulationError(detail: string)
+	self.simulationErrors += 1
+	self:log("simulation_error", detail)
 end
 
 function LabTelemetry:_player(name: string)
@@ -222,7 +258,7 @@ end
 	The tuning block is the important part: a run is close to meaningless
 	unless you know which truck produced it.
 ]]
-function LabTelemetry:_writeArtifact(outcome: string, crateSaved: boolean, duration: number)
+function LabTelemetry:_writeArtifact(outcome: string, crateSaved: boolean, summary)
 	if not DevConfig.RunArtifacts then
 		return
 	end
@@ -247,7 +283,7 @@ function LabTelemetry:_writeArtifact(outcome: string, crateSaved: boolean, durat
 		startedAt = self.startedAt,
 		outcome = outcome,
 		crateSaved = crateSaved,
-		duration = math.floor(duration * 10) / 10,
+		duration = summary.duration,
 		metrics = {
 			timeToInput = self.firstInputAt,
 			timeToMovement = self.firstMovementAt,
@@ -263,6 +299,18 @@ function LabTelemetry:_writeArtifact(outcome: string, crateSaved: boolean, durat
 			pressureEvents = self.pressureEvents,
 			designedCascade = self.designedCascade,
 			emergentCascade = self.emergentCascade,
+			finalProgress = summary.routeProgress,
+			finalCargoReadout = summary.cargoReadout,
+			finalChassisIntegrity = summary.chassisIntegrity,
+			manualResets = summary.manualResets,
+			simulationErrors = summary.simulationErrors,
+			driveInputAgeSamples = summary.driveInputAgeSamples,
+			driveInputAgeAverageMs = summary.driveInputAgeAverageMs,
+			driveInputAgeMaxMs = summary.driveInputAgeMaxMs,
+			driveInputAgeOver200Pct = summary.driveInputAgeOver200Pct,
+			driveInputAgeOver400Pct = summary.driveInputAgeOver400Pct,
+			variantKey = summary.variantKey,
+			endCause = summary.endCause,
 		},
 		crew = crew,
 		timeline = self.events,
@@ -300,13 +348,39 @@ function LabTelemetry:_writeArtifact(outcome: string, crateSaved: boolean, durat
 	)
 end
 
-function LabTelemetry:finish(outcome: string, crateSaved: boolean)
+function LabTelemetry:finish(outcome: string, crateSaved: boolean, finalState)
 	if not DevConfig.Telemetry then
-		return
+		return nil
 	end
 
 	local duration = os.clock() - self.runStart
 	self:log("run_end", outcome)
+	local ageSamples = self.driveInputAgeSamples
+	local summary = {
+		duration = math.floor(duration * 10) / 10,
+		routeProgress = math.floor(math.clamp(finalState.routeProgress or 0, 0, 1) * 1000) / 1000,
+		cargoReadout = math.floor(math.clamp(finalState.cargoReadout or 0, 0, 100)),
+		chassisIntegrity = math.floor(math.clamp(finalState.chassisIntegrity or 0, 0, 100)),
+		strapBreaks = self.strapBreaks,
+		strapRefits = self.strapRefits,
+		recoveries = self.recoveries,
+		throws = self.throws,
+		crewSwaps = self.crewSwaps,
+		pressureEvents = self.pressureEvents,
+		manualResets = self.manualResets,
+		simulationErrors = self.simulationErrors,
+		driveInputAgeSamples = ageSamples,
+		driveInputAgeAverageMs = if ageSamples > 0 then math.floor(self.driveInputAgeTotal * 1000 / ageSamples) else 0,
+		driveInputAgeMaxMs = math.floor(self.driveInputAgeMax * 1000),
+		driveInputAgeOver200Pct = if ageSamples > 0
+			then math.floor(self.driveInputAgeOver200 * 100 / ageSamples)
+			else 0,
+		driveInputAgeOver400Pct = if ageSamples > 0
+			then math.floor(self.driveInputAgeOver400 * 100 / ageSamples)
+			else 0,
+		variantKey = finalState.variantKey or "unknown",
+		endCause = finalState.endCause or "Unknown",
+	}
 
 	local lines = {
 		"",
@@ -331,6 +405,16 @@ function LabTelemetry:finish(outcome: string, crateSaved: boolean)
 		string.format("station moves      %d (%d throws)", self.stationMoves, self.throws),
 		string.format("crew swaps         %d", self.crewSwaps),
 		string.format("pressure events    %d", self.pressureEvents),
+		string.format("manual resets      %d", self.manualResets),
+		string.format("simulation errors  %d", self.simulationErrors),
+		string.format(
+			"drive input age    %d samples, avg %dms, max %dms, >=200ms %d%%, >=400ms %d%%",
+			summary.driveInputAgeSamples,
+			summary.driveInputAgeAverageMs,
+			summary.driveInputAgeMaxMs,
+			summary.driveInputAgeOver200Pct,
+			summary.driveInputAgeOver400Pct
+		),
 		string.format("designed cascade   %s", tostring(self.designedCascade)),
 		string.format("emergent cascade   %s", tostring(self.emergentCascade)),
 		"-- crew --",
@@ -358,7 +442,8 @@ function LabTelemetry:finish(outcome: string, crateSaved: boolean)
 
 	print(table.concat(lines, "\n"))
 
-	self:_writeArtifact(outcome, crateSaved, duration)
+	self:_writeArtifact(outcome, crateSaved, summary)
+	return summary
 end
 
 return LabTelemetry

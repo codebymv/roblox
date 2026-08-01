@@ -27,6 +27,30 @@ export type CargoCondition =
 
 export type Outcome = "Delivered" | "PartialLoss" | "CargoLost" | "TruckWrecked" | "TimeExpired"
 
+-- Compact, release-safe diagnostics. Unlike the Studio artifact this contains
+-- no player names, raw timeline, or high-frequency input stream.
+export type RunSummary = {
+	duration: number,
+	routeProgress: number,
+	cargoReadout: number,
+	chassisIntegrity: number,
+	strapBreaks: number,
+	strapRefits: number,
+	recoveries: number,
+	throws: number,
+	crewSwaps: number,
+	pressureEvents: number,
+	manualResets: number,
+	simulationErrors: number,
+	driveInputAgeSamples: number,
+	driveInputAgeAverageMs: number,
+	driveInputAgeMaxMs: number,
+	driveInputAgeOver200Pct: number,
+	driveInputAgeOver400Pct: number,
+	variantKey: string,
+	endCause: string,
+}
+
 -- Direction of travel on the condition ladder, not a second meter.
 export type ConditionTrend = "Worsening" | "Recovering" | "Stable"
 
@@ -110,6 +134,8 @@ export type LabSnapshot = {
 	outcomeCause: string?,
 	crateSaved: boolean?,
 	restartSeconds: number,
+	-- Heartbeat step latched after an error. Anyone may press R to clear it.
+	simHalted: boolean,
 	-- Personalized, structured public-playtest feedback. Asked once per player
 	-- session after they finish a run; no free text is collected.
 	feedbackRequested: boolean,

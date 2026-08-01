@@ -27,6 +27,9 @@ export type DrivePayload = {
 	throttle: number,
 	steering: number,
 	braking: boolean,
+	-- Synchronized server time sampled on the client immediately before send.
+	-- Optional so an older client can fail soft during a rolling publish.
+	sentAt: number?,
 }
 
 export type MovePayload = { station: string }
@@ -69,10 +72,14 @@ local validators: { [string]: (any) -> any } = {
 		if typeof(payload.braking) ~= "boolean" then
 			return nil
 		end
+		if payload.sentAt ~= nil and not isFinite(payload.sentAt) then
+			return nil
+		end
 		return {
 			throttle = math.clamp(payload.throttle, -1, 1),
 			steering = math.clamp(payload.steering, -1, 1),
 			braking = payload.braking,
+			sentAt = payload.sentAt,
 		}
 	end,
 

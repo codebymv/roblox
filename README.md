@@ -47,11 +47,11 @@ roblox/
 ## Docs
 
 Start with [Docs/README.md](Docs/README.md), which sorts the eight design
-documents by whether they still describe the build. The two worth reading first
-are [Docs/CoreFunAudit_V0.md](Docs/CoreFunAudit_V0.md), on why the depot
-prototype was not producing the fantasy, and
+documents by whether they still describe the build, then read
 [Docs/PlaytestProtocol_V0.md](Docs/PlaytestProtocol_V0.md), which is the next
-thing that happens to the project.
+thing that happens to the project. [Docs/CoreFunAudit_V0.md](Docs/CoreFunAudit_V0.md)
+is historical: it explains why the original Depot prototype was replaced, not
+how the current fun-test behaves.
 
 ## Tooling
 
@@ -151,6 +151,13 @@ Studio's output window is live-only, host-only and scrolls away; a run file can
 be compared against the run before it. Do not expect replay · Roblox's solver
 does not give determinism, so this is for comparison, not reproduction.
 
+Published servers keep those raw artifacts disabled. Instead, the Release
+profile sends a compact run summary through Roblox Analytics: outcome, route
+progress, final cargo and chassis condition, meaningful crew actions, resets,
+simulation errors, and aggregate client-to-server drive-input age. It contains
+no player names or raw input history and can be broken down by outcome, crew
+size, and run variant in the Creator Dashboard.
+
 ## The depot loop (`DevConfig.Mode = "Depot"`)
 
 The server is a **depot** with four bays. Each bay is one crew of up to four on its own parallel
@@ -198,8 +205,8 @@ worth copying into a second title. The game layer below is not.
 | `src/Shared/LabRemotes.lua` | Every remote declared with its payload type and a server-side validator |
 | `src/Shared/TuningSchema.lua`, `src/Server/TuningService.lua` | What is tunable, and live editing of it through attributes |
 | `src/Server/DevCommands.lua` | Warp, rebuild and dump, rate limited like any other remote |
-| `src/Server/LabTelemetry.lua` | Run timeline and the JSON artifact in `ServerStorage.LabRuns` |
-| `src/Server/LabAnalytics.lua` | Published-server onboarding funnel, run outcomes, session metrics, and structured feedback |
+| `src/Server/LabTelemetry.lua` | Studio run timeline/artifact plus the anonymous compact run summary |
+| `src/Server/LabAnalytics.lua` | Published-server onboarding funnel, run summaries, session metrics, and structured feedback |
 | `src/Server/PlayerDataService.lua` | Shared DataStore profile cache, autosave, volatile fallback, and `BindToClose` |
 | `src/Shared/LabProgression.lua`, `src/Server/LabProgressionService.lua` | Testable run rewards plus the persistent Cargo Cash and paint adapter |
 | `src/Shared/TokenBucket.lua`, `src/Server/RateLimiter.lua` | Throttling, split into engine-free maths and a Player-keyed wrapper |

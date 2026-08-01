@@ -103,8 +103,12 @@ function PressureDirector:_cargoPressure(progress: number)
 	local eventRoll = self.rng:NextNumber()
 	if eventRoll < 0.18 then
 		local chassis = self.chassisRig:getChassis()
+		if not chassis or not chassis.Parent then
+			return false
+		end
 		local side = if self.rng:NextNumber() > 0.5 then 1 else -1
-		local direction = (chassis.CFrame.RightVector * side + chassis.CFrame.LookVector * 0.25).Unit
+		local raw = chassis.CFrame.RightVector * side + chassis.CFrame.LookVector * 0.25
+		local direction = if raw.Magnitude > 1e-4 then raw.Unit else chassis.CFrame.RightVector * side
 		local velocityChange = pick(self.rng, LabConfig.GustAccel) * 0.3 * self.pressureScale
 		self.cargoLoad:applyJolt(direction * velocityChange)
 		self:_announce("Cargo jolt", if side > 0 then "right" else "left")
@@ -182,6 +186,9 @@ end
 ]]
 function PressureDirector:_environmentalPressure(progress: number)
 	local chassis = self.chassisRig:getChassis()
+	if not chassis or not chassis.Parent then
+		return false
+	end
 	local magnitude = pick(self.rng, LabConfig.GustAccel) * self.pressureScale
 	if inWindow(progress, BRIDGE_WINDOW) then
 		magnitude *= 1.35

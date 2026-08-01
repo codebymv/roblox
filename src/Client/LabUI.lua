@@ -23,7 +23,9 @@ local LabTypes = require(Shared:WaitForChild("LabTypes"))
 local Net = require(Shared:WaitForChild("Net"))
 local PresentationMath = require(Shared:WaitForChild("PresentationMath"))
 local RoleKits = require(Shared:WaitForChild("RoleKits"))
+local RunCauses = require(Shared:WaitForChild("RunCauses"))
 
+local DeviceInput = require(script.Parent.DeviceInput)
 local UIKit = require(script.Parent.UIKit)
 
 local LabUI = {}
@@ -126,13 +128,21 @@ local function label(
 end
 
 local function actionButton(parent: Instance, name: string, text: string, flex: number, order: number): TextButton
-	return UIKit.button({
+	local element = UIKit.button({
 		Name = name,
-		Size = UDim2.new(flex, -4, 1, 0),
+		-- Width comes from UIListLayout HorizontalFlex; scale widths were overflowing
+		-- the padded row (0.48+0.26+0.26 + gaps + inset).
+		Size = UDim2.fromScale(0, 1),
 		Text = text,
 		LayoutOrder = order,
 		Parent = parent,
 	})
+	local flexItem = Instance.new("UIFlexItem")
+	flexItem.FlexMode = Enum.UIFlexMode.Fill
+	flexItem.GrowRatio = flex
+	flexItem.ShrinkRatio = flex
+	flexItem.Parent = element
+	return element
 end
 
 local function button(parent: Instance, name: string, position: UDim2, size: UDim2, text: string): TextButton
@@ -214,9 +224,16 @@ local function drainToast()
 		return
 	end
 	toastShowing = true
+	local toastPanel = toastLabel.Parent
+	if toastPanel and toastPanel:IsA("GuiObject") then
+		toastPanel.Visible = true
+	end
 	toastLabel.Text = nextText
 	task.delay(TOAST_HOLD, function()
 		toastLabel.Text = ""
+		if toastPanel and toastPanel:IsA("GuiObject") then
+			toastPanel.Visible = false
+		end
 		toastShowing = false
 		drainToast()
 	end)
@@ -331,8 +348,12 @@ local function requestRoleSwitch()
 end
 
 local function buildControls(parent: Instance): Frame
-	local frame = panel(parent, "Controls", UDim2.new(0, 8, 1, -8), UDim2.fromOffset(348, 164))
+	local frame = panel(parent, "Controls", UDim2.new(0, 8, 1, -8), UDim2.fromOffset(360, 164))
 	frame.AnchorPoint = Vector2.new(0, 1)
+	local controlsConstraint = Instance.new("UISizeConstraint")
+	controlsConstraint.MinSize = Vector2.new(280, 164)
+	controlsConstraint.MaxSize = Vector2.new(420, 180)
+	controlsConstraint.Parent = frame
 
 	controlsTitle =
 		label(frame, "Title", UDim2.fromOffset(12, 8), UDim2.new(1, -24, 0, 18), "STATIONS", 14, Enum.Font.GothamBlack)
@@ -405,21 +426,6 @@ local function buildControls(parent: Instance): Frame
 	return frame
 end
 
-local function wantsTouchDrive(): boolean
-	-- Touchscreen laptops report TouchEnabled too; only show the pad when touch
-	-- is the preferred input or there is no keyboard to fall back on.
-	if not UserInputService.TouchEnabled then
-		return false
-	end
-	local ok, preferred = pcall(function()
-		return (UserInputService :: any).PreferredInput
-	end)
-	if ok and preferred == Enum.PreferredInput.Touch then
-		return true
-	end
-	return not UserInputService.KeyboardEnabled
-end
-
 local function currentDriveInput()
 	local throttle = (if keyForward or touchForward then 1 else 0) - (if keyReverse or touchReverse then 1 else 0)
 	throttle += padThrottle - padReverse
@@ -441,19 +447,15 @@ local function sendDriveInput(forceNeutral: boolean?)
 	if not snap or snap.myRole ~= "Driver" or snap.phase ~= "Run" or snap.swapActive then
 		return
 	end
-	LabRemotes.fireServer(
-		Net.Names.LabDrive,
-		if forceNeutral then { throttle = 0, steering = 0, braking = false } else currentDriveInput()
-	)
+	local drive = if forceNeutral then { throttle = 0, steering = 0, braking = false } else currentDriveInput()
+	drive.sentAt = Workspace:GetServerTimeNow()
+	LabRemotes.fireServer(Net.Names.LabDrive, drive)
 end
 
-local function buildTouchDrive(parent: Instance): Frame?
-	if not wantsTouchDrive() then
-		return nil
-	end
-
+local function buildTouchDrive(parent: Instance): Frame
 	local frame = panel(parent, "Drive", UDim2.new(1, -8, 1, -8), UDim2.fromOffset(220, 188))
 	frame.AnchorPoint = Vector2.new(1, 1)
+	frame.Visible = false
 	label(frame, "Title", UDim2.fromOffset(12, 6), UDim2.new(1, -24, 0, 18), "DRIVE", 14, Enum.Font.GothamBlack)
 
 	local hold = UIKit.bindHold
@@ -572,7 +574,8 @@ local function build()
 		UDim2.new(1, -24, 0, 24),
 		"LOAD SECURE",
 		19,
-		Enum.Font.GothamBlack
+		Enum.Font.GothamBlack,
+		true
 	)
 
 	if DevConfig.ShowDebugOverlay then
@@ -635,8 +638,16 @@ local function build()
 	briefConstraint.MinSize = Vector2.new(220, 78)
 	briefConstraint.Parent = brief
 
-	phaseBadge =
-		label(brief, "Phase", UDim2.fromOffset(14, 6), UDim2.new(1, -28, 0, 18), "PREP", 13, Enum.Font.GothamBlack)
+	phaseBadge = label(
+		brief,
+		"Phase",
+		UDim2.fromOffset(14, 6),
+		UDim2.new(1, -28, 0, 18),
+		"PREP",
+		13,
+		Enum.Font.GothamBlack,
+		true
+	)
 	phaseBadge.TextXAlignment = Enum.TextXAlignment.Center
 
 	countdownLabel =
@@ -662,26 +673,43 @@ local function build()
 	hintLabel.TextColor3 = UIKit.Theme.Muted
 	hintLabel.TextWrapped = true
 
-	toastLabel = label(root, "Toast", UDim2.new(0.5, 0, 0, 74), UDim2.new(0.8, 0, 0, 28), "", 17, Enum.Font.GothamBold)
-	toastLabel.AnchorPoint = Vector2.new(0.5, 0)
+	local toastPanel = panel(root, "Toast", UDim2.new(0.5, 0, 0, 112), UDim2.new(0.62, 0, 0, 36))
+	toastPanel.AnchorPoint = Vector2.new(0.5, 0)
+	toastPanel.BackgroundTransparency = 0.12
+	toastPanel.Visible = false
+	local toastConstraint = Instance.new("UISizeConstraint")
+	toastConstraint.MaxSize = Vector2.new(520, 40)
+	toastConstraint.MinSize = Vector2.new(200, 32)
+	toastConstraint.Parent = toastPanel
+	toastLabel =
+		label(toastPanel, "Text", UDim2.fromOffset(10, 0), UDim2.new(1, -20, 1, 0), "", 15, Enum.Font.GothamBold, true)
 	toastLabel.TextXAlignment = Enum.TextXAlignment.Center
+	toastLabel.TextYAlignment = Enum.TextYAlignment.Center
 	toastLabel.TextColor3 = UIKit.Theme.Accent
 	toastLabel.TextStrokeTransparency = 0.5
-	toastLabel.TextWrapped = true
 
 	resultFrame = panel(root, "Result", UDim2.fromScale(0.5, 0.5), UDim2.new(0.7, 0, 0, 168))
 	resultFrame.AnchorPoint = Vector2.new(0.5, 0.5)
 	resultFrame.BackgroundTransparency = 0.08
 	resultFrame.Visible = false
 	resultConstraint = Instance.new("UISizeConstraint")
-	resultConstraint.MaxSize = Vector2.new(480, 168)
-	resultConstraint.MinSize = Vector2.new(240, 168)
+	resultConstraint.MaxSize = Vector2.new(520, 168)
+	resultConstraint.MinSize = Vector2.new(280, 168)
 	resultConstraint.Parent = resultFrame
-	resultTitle =
-		label(resultFrame, "Title", UDim2.fromOffset(0, 22), UDim2.new(1, 0, 0, 36), "", 30, Enum.Font.GothamBlack)
+	resultTitle = label(
+		resultFrame,
+		"Title",
+		UDim2.fromOffset(16, 14),
+		UDim2.new(1, -32, 0, 44),
+		"",
+		26,
+		Enum.Font.GothamBlack,
+		true
+	)
 	resultTitle.TextXAlignment = Enum.TextXAlignment.Center
+	resultTitle.TextYAlignment = Enum.TextYAlignment.Center
 	resultDetail =
-		label(resultFrame, "Detail", UDim2.fromOffset(8, 62), UDim2.new(1, -16, 0, 88), "", 15, Enum.Font.GothamMedium)
+		label(resultFrame, "Detail", UDim2.fromOffset(16, 62), UDim2.new(1, -32, 0, 88), "", 15, Enum.Font.GothamMedium)
 	resultDetail.TextXAlignment = Enum.TextXAlignment.Center
 	resultDetail.TextWrapped = true
 
@@ -724,32 +752,43 @@ end
 
 -- ---------------------------------------------------------------- refresh
 
-local RESULT_DETAIL = {
+local OUTCOME_HEADLINE = {
+	Delivered = "Clean delivery.",
+	PartialLoss = "Delivered, but the load took a beating.",
+	CargoLost = "You lost the load.",
+	TruckWrecked = "Not going anywhere. 🥀",
+	TimeExpired = "Ran out of road time.",
+}
+
+local OUTCOME_DETAIL = {
 	Delivered = "Every strap held and the load never left the deck.",
 	PartialLoss = "You got there, but the load is not what it was.",
 	CargoLost = "The load is somewhere back on the road.",
-	TruckWrecked = "The truck is not going anywhere. 🥀",
 	TimeExpired = "The clock beat you to the depot.",
 }
 
-local WRECK_DETAIL = {
-	fell = "The truck dropped off the road edge. Bridge and shoulders count.",
-	rolled = "It stayed upside down too long.",
-	impact = "Chassis integrity hit zero. You were on the grass shoulder with hard brakes. Stay on the asphalt.",
-}
-
-local function wreckDetailText(snap: LabTypes.LabSnapshot): string
+local function resultBody(snap: LabTypes.LabSnapshot): string
+	local lines: { string } = {}
 	if snap.outcome == "TruckWrecked" then
-		local text = RESULT_DETAIL.TruckWrecked
-		if snap.outcomeCause and WRECK_DETAIL[snap.outcomeCause] then
-			text ..= "\n\n" .. WRECK_DETAIL[snap.outcomeCause]
-		end
-		return text
+		-- Always says something. RunCauses.explain falls back to generic advice
+		-- rather than leaving the one screen that explains a wreck blank.
+		table.insert(lines, RunCauses.explain(snap.outcomeCause))
+	elseif snap.outcome and OUTCOME_DETAIL[snap.outcome] then
+		table.insert(lines, OUTCOME_DETAIL[snap.outcome])
 	end
-	if snap.outcome then
-		return RESULT_DETAIL[snap.outcome] or ""
+	if snap.contractComplete ~= nil then
+		table.insert(
+			lines,
+			if snap.contractComplete
+				then string.format("%s COMPLETE · x%.2g PAY", snap.contractLabel, snap.rewardMultiplier)
+				else snap.contractLabel .. " MISSED"
+		)
 	end
-	return ""
+	if snap.rewardEarned > 0 then
+		table.insert(lines, string.format("+%d CARGO CASH · BALANCE %d", snap.rewardEarned, snap.credits))
+	end
+	table.insert(lines, string.format("Restarting in %ds · Press R to go now", snap.restartSeconds))
+	return table.concat(lines, "\n")
 end
 
 local STATION_MINE = Color3.fromRGB(95, 130, 190)
@@ -777,48 +816,26 @@ local function resetPresentation(snap: LabTypes.LabSnapshot)
 	}
 end
 
-local function deviceBucket(inputType: Enum.UserInputType): string
-	if
-		inputType == Enum.UserInputType.Gamepad1
-		or inputType == Enum.UserInputType.Gamepad2
-		or inputType == Enum.UserInputType.Gamepad3
-		or inputType == Enum.UserInputType.Gamepad4
-	then
-		return "Gamepad"
-	end
-	if inputType == Enum.UserInputType.Touch then
-		return "Touch"
-	end
-	return "Keyboard"
-end
-
-local function hintFor(
-	role: string?,
-	device: string,
-	solo: boolean?,
-	offTruck: boolean?,
-	phase: string,
-	restartSeconds: number?
-): string
+local function hintFor(role: string?, device: string, solo: boolean?, offTruck: boolean?, phase: string): string
 	if offTruck then
 		if device == "Gamepad" then
-			return "Off the truck. Recovering. Press Select if you stay stuck."
+			return "Press Select if you stay stuck."
 		end
-		return "Off the truck. Recovering. Press R if you stay stuck."
+		return "Press R if you stay stuck."
 	end
 	if phase == "Staging" then
 		if role == "Driver" then
 			if solo then
-				return "You drive when GO hits. Until then: T to swap role if you want a corner."
+				return "T swaps Driver and Strapper before GO."
 			end
-			return "Truck is parked. You drive when the countdown hits zero, not yet."
+			return "You drive when the countdown hits GO."
 		elseif role == "Strapper" then
-			return "Truck is parked. Tap 1–4 (or D-pad) to pick your corner before we roll."
+			return "Tap 1-4 or D-pad to pick your corner."
 		end
-		return "Get on the truck. T switches Driver ↔ Strapper."
+		return "T switches Driver and Strapper."
 	end
 	if phase == "Result" then
-		return string.format("Run finished. Next prep in %ds, or press R.", restartSeconds or 0)
+		return "Press R to skip the wait."
 	end
 	if role == "Driver" then
 		if solo then
@@ -908,7 +925,7 @@ refresh = function()
 	UIKit.setText(
 		phaseBadge,
 		if swapActive
-			then "SWAP — HANDOFF"
+			then "SWAP · HANDOFF"
 			elseif swapWarning then "SWAP AHEAD"
 			else badge.text .. " · " .. snap.difficultyLabel
 	)
@@ -977,16 +994,9 @@ refresh = function()
 	local timeY = if DevConfig.ShowDebugOverlay then 118 elseif showIntegrity then 86 else 66
 	UIKit.set(timeLabel, "Position", UDim2.fromOffset(12, timeY))
 	if isPrep then
-		local seconds = snap.restartSeconds
-		UIKit.setText(
-			timeLabel,
-			if seconds > 0 then string.format("Rolls in %ds, not driving yet", seconds) else "Rolling now…"
-		)
+		UIKit.setText(timeLabel, snap.difficultyLabel)
 	elseif isResult then
-		UIKit.setText(
-			timeLabel,
-			string.format("Next prep in %ds   route %d%%", snap.restartSeconds, math.floor(view.routeProgress * 100))
-		)
+		UIKit.setText(timeLabel, string.format("Route %d%%", math.floor(view.routeProgress * 100)))
 	else
 		UIKit.setText(
 			timeLabel,
@@ -1006,35 +1016,39 @@ refresh = function()
 		swapHint = "Controls locked briefly while everyone is reseated."
 	elseif swapWarning then
 		swapObjective = if snap.swapNextRole == "Driver"
-			then "SWAP AHEAD — YOU DRIVE NEXT"
-			elseif snap.swapNextStation then "SWAP AHEAD — MOVING TO " .. snap.swapNextStation
-			else "SWAP AHEAD — HOLD YOUR POSITION"
-		swapHint = "Everyone rotates automatically at the red signs."
+			then "SWAP AHEAD · YOU DRIVE NEXT"
+			elseif snap.swapNextStation then "SWAP AHEAD · MOVING TO " .. snap.swapNextStation
+			else "SWAP AHEAD · HOLD YOUR POSITION"
+		swapHint = "Everyone rotates at the red signs."
 	end
 
+	local showResult = isResult and snap.outcome ~= nil
 	UIKit.setText(
 		objectiveLabel,
-		if spectating
-			then if snap.crewCount >= snap.crewCapacity
-				then string.format("CREW FULL — SPECTATING (%d/%d)", snap.crewCount, snap.crewCapacity)
+		if showResult
+			then ""
+			elseif spectating then if snap.crewCount >= snap.crewCapacity
+				then string.format("CREW FULL · SPECTATING (%d/%d)", snap.crewCount, snap.crewCapacity)
 				else "WAITING FOR CREW SEAT"
-			elseif offTruck and not isResult then "Off the truck. Getting you back on."
+			elseif offTruck and not isResult then "Getting you back on."
 			elseif swapObjective then swapObjective
+			elseif isPrep then snap.cargoLabel .. " · " .. snap.cargoDescription
 			else snap.objective
 	)
 	UIKit.setText(
 		hintLabel,
-		if spectating
-			then if snap.crewCount >= snap.crewCapacity
-				then string.format("Waiting for a crew seat · queue #%d", snap.queuePosition or 1)
-				else "A seat is available; waiting for your character to attach."
+		if showResult
+			then "Press R to skip the wait."
+			elseif spectating then if snap.crewCount >= snap.crewCapacity
+				then string.format("Queue #%d", snap.queuePosition or 1)
+				else "Waiting for your character to attach."
 			elseif swapHint then swapHint
-			elseif isPrep then snap.cargoLabel .. " · " .. snap.cargoDescription
-			else hintFor(snap.myRole, inputDevice, snap.solo, offTruck, phase, snap.restartSeconds)
+			elseif isPrep then hintFor(snap.myRole, inputDevice, snap.solo, offTruck, phase)
+			else hintFor(snap.myRole, inputDevice, snap.solo, offTruck, phase)
 	)
-	if offTruck and not isResult and os.clock() - lastOffTruckToastAt > 8 then
+	if offTruck and not isResult and os.clock() - lastOffTruckToastAt > 12 then
 		lastOffTruckToastAt = os.clock()
-		showToast("Off the truck. Press R if you stay stuck.")
+		showToast("Press R if you stay stuck.")
 	end
 
 	if strapPanelFrame then
@@ -1042,7 +1056,8 @@ refresh = function()
 	end
 
 	if driveFrame then
-		UIKit.setVisible(driveFrame, isRun)
+		local showPad = isRun and DeviceInput.wantsTouchDrive()
+		UIKit.setVisible(driveFrame, showPad)
 		if swapActive then
 			setDimOverlay(driveFrame, true, "Crew handoff")
 		elseif not isRun then
@@ -1151,7 +1166,8 @@ refresh = function()
 		UIKit.Theme.Button
 	)
 	UIKit.setText(switchButton, if pendingRoleAt > 0 then "SWITCHING…" else "T · ROLE")
-	setButtonLive(restartButton, not spectating, UIKit.Theme.Danger)
+	-- Spectators may still clear a halted sim; otherwise a role-wipe soft-locks R.
+	setButtonLive(restartButton, (not spectating) or snap.simHalted == true, UIKit.Theme.Danger)
 
 	UIKit.setVisible(workButton, (isPrep or isRun) and (isStrapper or (snap.myRole == "Driver" and snap.solo)))
 	setButtonLive(workButton, canWork, UIKit.Theme.Positive)
@@ -1218,20 +1234,19 @@ refresh = function()
 		end
 	end
 
-	local showResult = isResult and snap.outcome ~= nil
 	UIKit.setVisible(resultFrame, showResult)
 	local feedbackRequested = showResult and snap.feedbackRequested
 	local feedbackSubmitted = showResult and snap.feedbackSubmitted
 	local resultHeight = if feedbackRequested then 242 elseif feedbackSubmitted then 198 else 168
 	UIKit.setSize(resultFrame, UDim2.new(0.7, 0, 0, resultHeight))
-	resultConstraint.MaxSize = Vector2.new(480, resultHeight)
-	resultConstraint.MinSize = Vector2.new(240, resultHeight)
+	resultConstraint.MaxSize = Vector2.new(520, resultHeight)
+	resultConstraint.MinSize = Vector2.new(280, resultHeight)
 	UIKit.setVisible(resultQuestion, feedbackRequested or feedbackSubmitted)
 	UIKit.setVisible(feedbackRow, feedbackRequested)
 	if feedbackRequested or feedbackSubmitted then
 		UIKit.setText(
 			resultQuestion,
-			if feedbackSubmitted then "FEEDBACK SAVED — THANK YOU" else "WOULD YOU PLAY ANOTHER RUN?"
+			if feedbackSubmitted then "FEEDBACK SAVED · THANK YOU" else "WOULD YOU PLAY ANOTHER RUN?"
 		)
 	end
 	for index, element in feedbackButtons do
@@ -1242,10 +1257,8 @@ refresh = function()
 		setButtonLive(element, feedbackRequested and not feedbackPending, color)
 	end
 	if showResult then
-		local contractLine = if snap.contractComplete
-			then string.format("\n%s COMPLETE · x%.2g PAY", snap.contractLabel, snap.rewardMultiplier)
-			else "\n" .. snap.contractLabel .. " MISSED"
-		UIKit.setText(resultTitle, string.upper(snap.outcome))
+		local headline = OUTCOME_HEADLINE[snap.outcome] or string.upper(snap.outcome or "")
+		UIKit.setText(resultTitle, headline)
 		UIKit.setTextColor(
 			resultTitle,
 			if snap.outcome == "Delivered"
@@ -1253,15 +1266,7 @@ refresh = function()
 				elseif snap.outcome == "PartialLoss" then Color3.fromRGB(245, 195, 80)
 				else Color3.fromRGB(235, 95, 85)
 		)
-		UIKit.setText(
-			resultDetail,
-			wreckDetailText(snap)
-				.. contractLine
-				.. (if snap.rewardEarned > 0
-					then string.format("\n+%d CARGO CASH - BALANCE %d", snap.rewardEarned, snap.credits)
-					else "")
-				.. string.format("\nRestarting in %ds. Press R to go now.", snap.restartSeconds)
-		)
+		UIKit.setText(resultDetail, resultBody(snap))
 	end
 end
 
@@ -1290,30 +1295,50 @@ local function stepPresentation(dt: number)
 	local elapsed = presentationAccumulator
 	presentationAccumulator = 0
 
-	presented.speed = smoothValue(presented.speed, snap.speed, elapsed, 80)
-	presented.routeProgress = smoothValue(presented.routeProgress, snap.routeProgress, elapsed, 0.08)
-	presented.cargoReadout = smoothValue(presented.cargoReadout, snap.cargoReadout, elapsed, 35)
-	presented.cargoOffset = smoothValue(presented.cargoOffset, snap.cargoOffset, elapsed, 3)
-	presented.cargoLeanDeg = smoothValue(presented.cargoLeanDeg, snap.cargoLeanDeg, elapsed, 25)
-	presented.chassisIntegrity = smoothValue(presented.chassisIntegrity, snap.chassisIntegrity, elapsed, 30)
+	local dirty = false
+	local function trackSmooth(current: number, target: number, snapGap: number): number
+		local nextValue = smoothValue(current, target, elapsed, snapGap)
+		if math.abs(nextValue - current) > 1e-3 then
+			dirty = true
+		end
+		return nextValue
+	end
+
+	presented.speed = trackSmooth(presented.speed, snap.speed, 80)
+	presented.routeProgress = trackSmooth(presented.routeProgress, snap.routeProgress, 0.08)
+	presented.cargoReadout = trackSmooth(presented.cargoReadout, snap.cargoReadout, 35)
+	presented.cargoOffset = trackSmooth(presented.cargoOffset, snap.cargoOffset, 3)
+	presented.cargoLeanDeg = trackSmooth(presented.cargoLeanDeg, snap.cargoLeanDeg, 25)
+	presented.chassisIntegrity = trackSmooth(presented.chassisIntegrity, snap.chassisIntegrity, 30)
 
 	for _, entry in snap.straps do
 		local shown = presented.straps[entry.id]
 		if not shown then
 			shown = { health = entry.health, tension = entry.tension }
 			presented.straps[entry.id] = shown
+			dirty = true
 		end
 		if entry.broken then
 			-- A break is gameplay-critical feedback, so it never eases in.
+			if shown.health ~= entry.health or shown.tension ~= entry.tension then
+				dirty = true
+			end
 			shown.health = entry.health
 			shown.tension = entry.tension
 		else
-			shown.health = smoothValue(shown.health, entry.health, elapsed, LabConfig.StrapMaxHealth * 0.6)
-			shown.tension = smoothValue(shown.tension, entry.tension, elapsed, 2)
+			local nextHealth = smoothValue(shown.health, entry.health, elapsed, LabConfig.StrapMaxHealth * 0.6)
+			local nextTension = smoothValue(shown.tension, entry.tension, elapsed, 2)
+			if math.abs(nextHealth - shown.health) > 1e-3 or math.abs(nextTension - shown.tension) > 1e-3 then
+				dirty = true
+			end
+			shown.health = nextHealth
+			shown.tension = nextTension
 		end
 	end
 
-	refresh()
+	if dirty then
+		refresh()
+	end
 end
 
 -- ----------------------------------------------------------------- inputs
@@ -1340,9 +1365,34 @@ local function cycleStation(direction: number)
 	requestStation(order[nextIndex])
 end
 
+local function isTruckControlKey(code: Enum.KeyCode): boolean
+	return code == Enum.KeyCode.W
+		or code == Enum.KeyCode.Up
+		or code == Enum.KeyCode.S
+		or code == Enum.KeyCode.Down
+		or code == Enum.KeyCode.A
+		or code == Enum.KeyCode.Left
+		or code == Enum.KeyCode.D
+		or code == Enum.KeyCode.Right
+		or code == Enum.KeyCode.Space
+		or code == Enum.KeyCode.E
+		or code == Enum.KeyCode.R
+		or code == Enum.KeyCode.T
+		or code == Enum.KeyCode.One
+		or code == Enum.KeyCode.Two
+		or code == Enum.KeyCode.Three
+		or code == Enum.KeyCode.Four
+end
+
 local function bindKeyboard()
 	UserInputService.InputBegan:Connect(function(input: InputObject, processed: boolean)
-		if processed then
+		-- Seated Drivers get WASD marked processed by the default PlayerModule.
+		-- After wreck→reseat that path is reliable, so ignoring processed here
+		-- was leaving throttle at 0 forever while the truck looked fine.
+		if processed and not isTruckControlKey(input.KeyCode) then
+			return
+		end
+		if UserInputService:GetFocusedTextBox() then
 			return
 		end
 		local code = input.KeyCode
@@ -1493,15 +1543,22 @@ local function bindGamepad()
 end
 
 local function bindInputs()
-	inputDevice = deviceBucket(UserInputService:GetLastInputType())
+	inputDevice = DeviceInput.bucketFor(UserInputService:GetLastInputType())
 	UserInputService.LastInputTypeChanged:Connect(function(inputType)
-		inputDevice = deviceBucket(inputType)
+		inputDevice = DeviceInput.bucketFor(inputType)
 		if latest then
 			local off = latest.myOffTruck or latest.myThrown
-			UIKit.setText(
-				hintLabel,
-				hintFor(latest.myRole, inputDevice, latest.solo, off, latest.phase, latest.restartSeconds)
-			)
+			UIKit.setText(hintLabel, hintFor(latest.myRole, inputDevice, latest.solo, off, latest.phase))
+			if driveFrame then
+				local showPad = latest.phase == "Run" and DeviceInput.wantsTouchDrive()
+				UIKit.setVisible(driveFrame, showPad)
+			end
+		end
+	end)
+	DeviceInput.onPreferredInputChanged(function()
+		if driveFrame and latest then
+			local showPad = latest.phase == "Run" and DeviceInput.wantsTouchDrive()
+			UIKit.setVisible(driveFrame, showPad)
 		end
 	end)
 
@@ -1671,9 +1728,9 @@ function LabUI.mount()
 		showToast(text)
 	end)
 
-	RunService.RenderStepped:Connect(stepPresentation)
-
 	RunService.Heartbeat:Connect(function(dt: number)
+		stepPresentation(dt)
+
 		driveAccumulator += dt
 		if driveAccumulator < 0.06 then
 			return

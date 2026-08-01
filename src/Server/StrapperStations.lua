@@ -54,8 +54,12 @@ function StrapperStations:_freeStation(): string?
 	return nil
 end
 
-function StrapperStations:_makeSeat(name: string, offset: CFrame, density: number): (Seat, Weld)
+function StrapperStations:_makeSeat(name: string, offset: CFrame, density: number): (Seat?, Weld?)
 	local chassis = self.chassisRig:getChassis()
+	local model = self.chassisRig:getModel()
+	if not chassis or not chassis.Parent or not model or not model.Parent then
+		return nil, nil
+	end
 
 	local seat = Instance.new("Seat")
 	seat.Name = name
@@ -66,7 +70,7 @@ function StrapperStations:_makeSeat(name: string, offset: CFrame, density: numbe
 	seat.CanCollide = false
 	seat.CustomPhysicalProperties = PhysicalProperties.new(density, 0.4, 0, 1, 1)
 	seat.CFrame = chassis.CFrame * offset
-	seat.Parent = self.chassisRig:getModel()
+	seat.Parent = model
 
 	-- A Weld, not a WeldConstraint: C0 is animatable, which is how a crew
 	-- member travels the bed without ever leaving the assembly.
@@ -87,7 +91,7 @@ function StrapperStations:_makeSeat(name: string, offset: CFrame, density: numbe
 		grabRail.CanCollide = false
 		grabRail.Massless = true
 		grabRail.CFrame = seat.CFrame * CFrame.new(0, 1.15, -1.05)
-		grabRail.Parent = self.chassisRig:getModel()
+		grabRail.Parent = model
 
 		local railWeld = Instance.new("WeldConstraint")
 		railWeld.Part0 = seat
@@ -218,10 +222,18 @@ function StrapperStations:recoverAll()
 		slot.working = false
 		slot.travelElapsed = 0
 
+		local weldLive = slot.weld and slot.weld.Parent
+		local seatLive = slot.seat and slot.seat.Parent
+		if not weldLive and not seatLive then
+			continue
+		end
+
 		if slot.role == "Driver" then
 			slot.station = nil
 			slot.movingTo = nil
-			slot.weld.C0 = LabConfig.DriverSeatOffset
+			if weldLive then
+				slot.weld.C0 = LabConfig.DriverSeatOffset
+			end
 		else
 			local station = slot.station or slot.movingTo
 			if not station or self.occupancy[station] then
@@ -231,12 +243,14 @@ function StrapperStations:recoverAll()
 			slot.movingTo = nil
 			if station then
 				self.occupancy[station] = slot.player.UserId
-				slot.weld.C0 = LabConfig.StationLocal[station]
+				if weldLive then
+					slot.weld.C0 = LabConfig.StationLocal[station]
+				end
 			end
 		end
 
 		local humanoid = self:_humanoidReady(slot.player)
-		if humanoid then
+		if humanoid and seatLive then
 			self:_seat(slot.seat, humanoid)
 		end
 	end
@@ -258,7 +272,9 @@ function StrapperStations:suspendRespawn(player: Player)
 		slot.station = slot.movingTo
 		slot.movingTo = nil
 		slot.travelElapsed = 0
-		slot.weld.C0 = LabConfig.StationLocal[slot.station]
+		if slot.weld and slot.weld.Parent and slot.station then
+			slot.weld.C0 = LabConfig.StationLocal[slot.station]
+		end
 	end
 	slot.working = false
 	slot.thrown = false
@@ -276,17 +292,20 @@ function StrapperStations:_humanoidReady(player: Player): Humanoid?
 	if not humanoid or humanoid.Health <= 0 then
 		return nil
 	end
-	local root = character:FindFirstChild("HumanoidRootPart")
-	if not root then
-		root = character:WaitForChild("HumanoidRootPart", 3)
-	end
-	if not root then
+	-- Never WaitForChild here: this runs from Heartbeat. A yield mid-step is how
+	-- a respawn after a wreck latched the simulation into "Simulation error".
+	if not character:FindFirstChild("HumanoidRootPart") then
 		return nil
 	end
 	return humanoid
 end
 
 function StrapperStations:attach(player: Player, role: string): boolean
+	local chassis = self.chassisRig:getChassis()
+	if not chassis or not chassis.Parent then
+		return false
+	end
+
 	local humanoid = self:_humanoidReady(player)
 	if not humanoid then
 		return false
@@ -302,14 +321,19 @@ function StrapperStations:attach(player: Player, role: string): boolean
 		existing.missedSeat = 0
 		if existing.role == "Strapper" and not existing.station then
 			self:_reseat(existing)
-		else
+		elseif existing.seat and existing.seat.Parent then
 			self:_seat(existing.seat, humanoid)
+		else
+			return false
 		end
 		return true
 	end
 
 	if role == "Driver" then
 		local seat, weld = self:_makeSeat("DriverSeat", LabConfig.DriverSeatOffset, 8)
+		if not seat or not weld then
+			return false
+		end
 		self.slots[player.UserId] = {
 			player = player,
 			role = "Driver",
@@ -336,6 +360,9 @@ function StrapperStations:attach(player: Player, role: string): boolean
 
 	local offset = LabConfig.StationLocal[station]
 	local seat, weld = self:_makeSeat("Station_" .. station, offset, LabConfig.StationSeatDensity)
+	if not seat or not weld then
+		return false
+	end
 	self.occupancy[station] = player.UserId
 	self.slots[player.UserId] = {
 		player = player,
@@ -426,6 +453,9 @@ function StrapperStations:rotateCrew(graceSeconds: number)
 	for userId, assignment in assignments do
 		local slot = self.slots[userId]
 		if not slot then
+			continue
+		end
+		if not slot.seat or not slot.seat.Parent or not slot.weld or not slot.weld.Parent then
 			continue
 		end
 
@@ -585,6 +615,11 @@ function StrapperStations:consumeThrows(): { string }
 end
 
 function StrapperStations:_reseat(slot)
+	if not slot.seat or not slot.seat.Parent or not slot.weld or not slot.weld.Parent then
+		slot.thrownUntil = os.clock() + 0.5
+		return
+	end
+
 	local humanoid = self:_humanoidReady(slot.player)
 	if not humanoid then
 		slot.thrownUntil = os.clock() + 0.5
@@ -617,13 +652,18 @@ function StrapperStations:_reseat(slot)
 end
 
 function StrapperStations:step(dt: number)
-	local lateral = math.abs(self.chassisRig.lateralAccel)
+	local chassis = self.chassisRig:getChassis()
+	-- Parked / Result trucks keep stale lateralAccel; never throw while frozen.
+	local throwsAllowed = chassis ~= nil and chassis.Parent ~= nil and not chassis.Anchored
+	local lateral = if throwsAllowed then math.abs(self.chassisRig.lateralAccel) else 0
 	local inRotationGrace = os.clock() < self.rotationGraceUntil
 
 	for _, slot in self.slots do
 		if slot.respawnBlocked then
 			continue
 		end
+		local seatLive = slot.seat and slot.seat.Parent
+		local weldLive = slot.weld and slot.weld.Parent
 		if slot.thrown then
 			if os.clock() >= slot.thrownUntil then
 				self:_reseat(slot)
@@ -634,10 +674,10 @@ function StrapperStations:step(dt: number)
 		-- claimOwnership after Sit can break the SeatWeld. Put anyone who
 		-- slipped out back in before they walk off-camera and take void damage.
 		local humanoid = self:_humanoidReady(slot.player)
-		local seated = humanoid and slot.seat and slot.seat.Occupant == humanoid
+		local seated = humanoid and seatLive and slot.seat.Occupant == humanoid
 		if seated then
 			slot.missedSeat = 0
-		elseif slot.seat and humanoid and os.clock() - (slot.lastReseatAt or 0) > 0.35 then
+		elseif seatLive and humanoid and os.clock() - (slot.lastReseatAt or 0) > 0.35 then
 			slot.lastReseatAt = os.clock()
 			slot.missedSeat = (slot.missedSeat or 0) + 1
 			-- After a couple of soft Sit attempts, snap the body onto the seat
@@ -656,12 +696,17 @@ function StrapperStations:step(dt: number)
 			slot.travelElapsed += dt
 
 			-- Caught out of position by a hard direction change.
-			if not inRotationGrace and lateral > LabConfig.ThrowLateralAccel then
+			if throwsAllowed and not inRotationGrace and lateral > LabConfig.ThrowLateralAccel then
 				self:_throw(slot)
 				continue
 			end
 
-			local t = math.clamp(slot.travelElapsed / slot.travelDuration, 0, 1)
+			if not weldLive then
+				continue
+			end
+
+			local travelDuration = math.max(slot.travelDuration or 0, 1e-3)
+			local t = math.clamp(slot.travelElapsed / travelDuration, 0, 1)
 			local position = bezier(slot.travelFrom.Position, slot.travelControl, slot.travelTo.Position, t)
 			local rotation = if t < 0.5 then slot.travelFrom.Rotation else slot.travelTo.Rotation
 			slot.weld.C0 = CFrame.new(position) * rotation
@@ -680,7 +725,7 @@ function StrapperStations:step(dt: number)
 		end
 
 		-- Even braced at a station, a big enough hit puts you over the side.
-		if not inRotationGrace and lateral > LabConfig.ThrowLateralAccel * 1.55 then
+		if throwsAllowed and not inRotationGrace and lateral > LabConfig.ThrowLateralAccel * 1.55 then
 			self:_throw(slot)
 		end
 	end

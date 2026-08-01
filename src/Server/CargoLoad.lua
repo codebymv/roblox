@@ -25,6 +25,7 @@ local LabConfig = require(Shared:WaitForChild("LabConfig"))
 local LabTypes = require(Shared:WaitForChild("LabTypes"))
 
 local GRAVITY = workspace.Gravity
+local GRAVITY_DOWN = Vector3.new(0, -GRAVITY, 0)
 
 local CargoLoad = {}
 CargoLoad.__index = CargoLoad
@@ -59,6 +60,8 @@ function CargoLoad.new(chassis, parent: Instance)
 		brackets = {},
 		home = LabConfig.CrateHome,
 		variantModel = nil,
+		_dragRaySizeY = nil :: number?,
+		_dragRayDir = Vector3.new(0, -(LabConfig.CrateSize.Y * 0.5 + 0.8), 0),
 	}, CargoLoad)
 
 	self:_build()
@@ -78,12 +81,16 @@ function CargoLoad:_build()
 	pallet.Anchored = false
 	pallet.CanCollide = true
 	pallet.CustomPhysicalProperties = PhysicalProperties.new(0.9, 0.55, 0, 1, 1)
-	pallet.Parent = self.parent
+	-- Parent under the truck model so PivotTo on reset/warp moves the pallet with
+	-- the chassis. Parenting under the route folder left it at the wreck pose
+	-- until the weld solver yanked the assembly.
+	pallet.Parent = self.chassisRig:getModel()
 
 	local palletWeld = Instance.new("WeldConstraint")
 	palletWeld.Part0 = body
 	palletWeld.Part1 = pallet
 	palletWeld.Parent = body
+	self.palletWeld = palletWeld
 
 	local crate = Instance.new("Part")
 	crate.Name = "Crate"
@@ -492,7 +499,8 @@ function CargoLoad:tighten(id: string, dt: number, workerName: string?): boolean
 		strap.reattachProgress += dt
 		if strap.reattachProgress >= LabConfig.StrapReattachSeconds then
 			local gap = (strap.railAttachment.WorldPosition - strap.crateAttachment.WorldPosition).Magnitude
-			strap.stretch = math.clamp(gap - strap.restLength, 0, LabConfig.StrapMaxStretch)
+			local maxStretch = math.max(0, LabConfig.StrapMaxStretch)
+			strap.stretch = math.clamp(gap - strap.restLength, 0, maxStretch)
 			strap.health = LabConfig.StrapMaxHealth * 0.45
 			strap.reattachProgress = 0
 			self:_makeRope(id)
@@ -524,7 +532,7 @@ end
 function CargoLoad:step(dt: number)
 	local crate = self.crate
 	local body = self.chassisRig:getChassis()
-	if not crate or not crate.Parent or not body or crate.Anchored or body.Anchored then
+	if not crate or not crate.Parent or not body or not body.Parent or crate.Anchored or body.Anchored then
 		return
 	end
 
@@ -536,17 +544,28 @@ function CargoLoad:step(dt: number)
 		whatever the truck just did, plus its weight. Expressed in crate-weights
 		so the thresholds in LabConfig stay readable.
 	]]
-	local pseudoWorld = (-self.chassisRig.accelWorld + Vector3.new(0, -GRAVITY, 0)) * self.crateMass
+	local pseudoWorld = (-self.chassisRig.accelWorld + GRAVITY_DOWN) * self.crateMass
 	local demand = pseudoWorld / weight
 
 	for _, id in LabConfig.StrapOrder do
 		local strap = self.straps[id]
+		if not strap then
+			continue
+		end
 
 		if strap.broken then
-			local gap = (strap.railAttachment.WorldPosition - strap.crateAttachment.WorldPosition).Magnitude
-			strap.reattachable = gap <= LabConfig.StrapReattachMaxGap
+			if strap.railAttachment and strap.crateAttachment then
+				local gap = (strap.railAttachment.WorldPosition - strap.crateAttachment.WorldPosition).Magnitude
+				strap.reattachable = gap <= LabConfig.StrapReattachMaxGap
+			else
+				strap.reattachable = false
+			end
 			strap.tension = 0
 			self:_updateMarker(strap)
+			continue
+		end
+
+		if not strap.railAttachment or not strap.crateAttachment then
 			continue
 		end
 
@@ -572,7 +591,8 @@ function CargoLoad:step(dt: number)
 			-- out of position across a run instead of failing all at once.
 			local cooldown = self.shockCooldown[id] or 0
 			if tension > LabConfig.StrapTensionThreshold * 2.4 and os.clock() > cooldown then
-				strap.stretch = math.min(LabConfig.StrapMaxStretch, strap.stretch + LabConfig.StrapStretchPerShock)
+				local maxStretch = math.max(0, LabConfig.StrapMaxStretch)
+				strap.stretch = math.min(maxStretch, strap.stretch + LabConfig.StrapStretchPerShock)
 				self.shockCooldown[id] = os.clock() + 0.5
 			end
 
@@ -603,7 +623,7 @@ function CargoLoad:_updateCondition(dt: number, bodyCF: CFrame)
 	local localPosition = bodyCF:PointToObjectSpace(crate.Position)
 	local delta = localPosition - self.home
 	self.localOffset = delta
-	self.offset = Vector3.new(delta.X, 0, delta.Z).Magnitude
+	self.offset = math.sqrt(delta.X * delta.X + delta.Z * delta.Z)
 
 	local alignment = math.clamp(crate.CFrame.UpVector:Dot(bodyCF.UpVector), -1, 1)
 	self.leanDeg = math.deg(math.acos(alignment))
@@ -612,6 +632,9 @@ function CargoLoad:_updateCondition(dt: number, bodyCF: CFrame)
 	local healthSum = 0
 	for _, id in LabConfig.StrapOrder do
 		local strap = self.straps[id]
+		if not strap then
+			continue
+		end
 		healthSum += strap.health
 		if strap.broken then
 			brokenCount += 1
@@ -619,9 +642,14 @@ function CargoLoad:_updateCondition(dt: number, bodyCF: CFrame)
 	end
 
 	-- Is the load physically scraping the ground?
-	local down = Vector3.new(0, -(crate.Size.Y * 0.5 + 0.8), 0)
-	local hit = workspace:Raycast(crate.Position, down, self.dragRayParams)
-	local horizontalSpeed = Vector3.new(crate.AssemblyLinearVelocity.X, 0, crate.AssemblyLinearVelocity.Z).Magnitude
+	local crateSizeY = crate.Size.Y
+	if crateSizeY ~= self._dragRaySizeY then
+		self._dragRaySizeY = crateSizeY
+		self._dragRayDir = Vector3.new(0, -(crateSizeY * 0.5 + 0.8), 0)
+	end
+	local hit = workspace:Raycast(crate.Position, self._dragRayDir, self.dragRayParams)
+	local vel = crate.AssemblyLinearVelocity
+	local horizontalSpeed = math.sqrt(vel.X * vel.X + vel.Z * vel.Z)
 	self.dragging = hit ~= nil and self.offset > LabConfig.ShiftedOffset and horizontalSpeed > 3
 
 	if self.dragging then
@@ -632,7 +660,8 @@ function CargoLoad:_updateCondition(dt: number, bodyCF: CFrame)
 	end
 
 	local separation = (crate.Position - bodyCF.Position).Magnitude
-	self.lost = (brokenCount >= #LabConfig.StrapOrder and self.offset > LabConfig.LostOffset) or separation > 34
+	self.lost = (brokenCount >= #LabConfig.StrapOrder and self.offset > LabConfig.LostOffset)
+		or separation > LabConfig.LostSeparationStuds
 
 	local condition: LabTypes.CargoCondition
 	if self.lost then
@@ -715,15 +744,27 @@ function CargoLoad:snapshotStraps(): { LabTypes.StrapSnapshot }
 	local list = {}
 	for index, id in LabConfig.StrapOrder do
 		local strap = self.straps[id]
-		list[index] = {
-			id = id,
-			health = math.floor(strap.health),
-			tension = math.floor(strap.tension * 100) / 100,
-			broken = strap.broken,
-			stretch = math.floor(strap.stretch * 100) / 100,
-			reattachable = strap.reattachable,
-			workedBy = strap.workedBy,
-		}
+		if strap then
+			list[index] = {
+				id = id,
+				health = math.floor(strap.health),
+				tension = math.floor(strap.tension * 100) / 100,
+				broken = strap.broken,
+				stretch = math.floor(strap.stretch * 100) / 100,
+				reattachable = strap.reattachable,
+				workedBy = strap.workedBy,
+			}
+		else
+			list[index] = {
+				id = id,
+				health = 0,
+				tension = 0,
+				broken = true,
+				stretch = 0,
+				reattachable = false,
+				workedBy = nil,
+			}
+		end
 	end
 	return list
 end
@@ -746,6 +787,16 @@ function CargoLoad:reseat()
 	crate.CFrame = body.CFrame * CFrame.new(self.home)
 	crate.AssemblyLinearVelocity = Vector3.zero
 	crate.AssemblyAngularVelocity = Vector3.zero
+
+	local pallet = self.pallet
+	if pallet and pallet.Parent then
+		local palletCenterY = self.home.Y - crate.Size.Y * 0.5 - 0.18
+		pallet.AssemblyLinearVelocity = Vector3.zero
+		pallet.AssemblyAngularVelocity = Vector3.zero
+		pallet.CFrame = body.CFrame * CFrame.new(self.home.X, palletCenterY, self.home.Z)
+		pallet.AssemblyLinearVelocity = Vector3.zero
+		pallet.AssemblyAngularVelocity = Vector3.zero
+	end
 end
 
 function CargoLoad:setFrozen(frozen: boolean)
@@ -756,10 +807,17 @@ function CargoLoad:setFrozen(frozen: boolean)
 	crate.AssemblyLinearVelocity = Vector3.zero
 	crate.AssemblyAngularVelocity = Vector3.zero
 	crate.Anchored = frozen
+
+	local pallet = self.pallet
+	if pallet and pallet.Parent then
+		pallet.AssemblyLinearVelocity = Vector3.zero
+		pallet.AssemblyAngularVelocity = Vector3.zero
+	end
 end
 
 function CargoLoad:reset()
-	self:setFrozen(false)
+	-- Reseat while frozen so the crate cannot free-fall between place and freeze.
+	self:setFrozen(true)
 	self:reseat()
 
 	for _, id in LabConfig.StrapOrder do
@@ -800,6 +858,15 @@ function CargoLoad:destroy()
 			strap.marker = nil
 			strap.markerLabel = nil
 		end
+		local bracket = self.brackets[id]
+		if bracket and bracket.part then
+			bracket.part:Destroy()
+		end
+	end
+	table.clear(self.brackets)
+	if self.pallet then
+		self.pallet:Destroy()
+		self.pallet = nil
 	end
 	if self.crate then
 		self.crate:Destroy()

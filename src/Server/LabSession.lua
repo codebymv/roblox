@@ -21,12 +21,14 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local DevConfig = require(Shared:WaitForChild("DevConfig"))
 local LabConfig = require(Shared:WaitForChild("LabConfig"))
 local LabRemotes = require(Shared:WaitForChild("LabRemotes"))
 local Net = require(Shared:WaitForChild("Net"))
+local RunCauses = require(Shared:WaitForChild("RunCauses"))
 local RunVariants = require(Shared:WaitForChild("RunVariants"))
 
 local CargoLoad = require(script.Parent.CargoLoad)
@@ -49,6 +51,11 @@ local INPUT_SAMPLE_INTERVAL = 0.25
 -- Below twenty frames a second the solver is already in trouble; clamping
 -- stops a hitch from being integrated as one enormous step.
 local MAX_STEP = 1 / 20
+local DELIVERY_CHECK_INTERVAL = 0.2
+
+-- Reused every Heartbeat so idle / brake drive paths allocate nothing.
+local DRIVE_IDLE = { throttle = 0, steering = 0, braking = false }
+local DRIVE_BRAKE = { throttle = 0, steering = 0, braking = true }
 
 local LabSession = {}
 LabSession.__index = LabSession
@@ -89,10 +96,12 @@ function LabSession.new(config: Config)
 		debugAccumulator = 0,
 		ownershipAccumulator = 0,
 		sampleAccumulator = 0,
+		deliveryAccumulator = 0,
 
 		-- Set when the simulation step throws. See _bindHeartbeat for why this
 		-- latches rather than retrying.
 		stepFailed = false,
+		lastPendingRecoverAt = 0,
 		started = false,
 
 		-- Landmarks already warned about this run, keyed by name.
@@ -203,17 +212,25 @@ end
 function LabSession:_driveState()
 	local driver = self:currentDriver()
 	if not driver or self.phase ~= "Run" then
-		return { throttle = 0, steering = 0, braking = self.phase ~= "Run" }
-	end
-	if self.stations and self.stations:isOffTruck(driver) then
-		return { throttle = 0, steering = 0, braking = true }
+		return if self.phase ~= "Run" then DRIVE_BRAKE else DRIVE_IDLE
 	end
 	if os.clock() < self.swapHandoffUntil then
-		return { throttle = 0, steering = 0, braking = true }
+		return DRIVE_BRAKE
 	end
 	local state = self.driveInputs[driver.UserId]
-	if not state or os.clock() - state.at > 1 then
-		return { throttle = 0, steering = 0, braking = false }
+	local hasFreshInput = state ~= nil and os.clock() - state.at <= 1
+	-- Thrown / respawn-blocked Drivers stay braked. A brief SeatWeld drop after
+	-- claimOwnership must not discard fresh throttle (that felt like a dead truck
+	-- after wreck→GO while the HUD still said ON THE ROAD).
+	if self.stations and self.stations:isOffTruck(driver) then
+		local slot = self.stations:getSlot(driver)
+		local hardOff = slot and (slot.thrown or slot.respawnBlocked)
+		if hardOff or not hasFreshInput then
+			return DRIVE_BRAKE
+		end
+	end
+	if not hasFreshInput then
+		return DRIVE_IDLE
 	end
 	return state
 end
@@ -316,6 +333,7 @@ function LabSession:_buildSharedSnapshot()
 		-- Countdown copy and the large numeral must always describe the same
 		-- second. The objective also uses ceil while a partial second remains.
 		restartSeconds = math.max(0, math.ceil(self.restartSeconds)),
+		simHalted = self.stepFailed == true,
 		solo = solo,
 		swapWarning = self.swapWarningGate ~= nil and not solo,
 		swapActive = os.clock() < self.swapHandoffUntil,
@@ -511,7 +529,6 @@ function LabSession:_performCrewSwap(gateIndex: number)
 	self.objective = "SWAP! " .. driverName .. " has the wheel."
 	self.telemetry:noteCrewSwap(gateIndex, driverName)
 	self.analytics:crewSwap(gateIndex, self:_crewPlayers())
-	self:toast("SWAP! " .. driverName .. " has the wheel.")
 	self:_broadcastSnapshot()
 	return true
 end
@@ -520,7 +537,7 @@ function LabSession:_stepSwapGates(progress: number)
 	local now = os.clock()
 	if self.swapHandoffUntil > 0 and now >= self.swapHandoffUntil then
 		self.swapHandoffUntil = 0
-		self.objective = "GO — get the load to the depot."
+		self.objective = "GO · get the load to the depot."
 		self:_broadcastSnapshot()
 	end
 
@@ -545,13 +562,13 @@ function LabSession:_stepSwapGates(progress: number)
 	local shouldWarn = crewCount >= 2 and progress >= gateProgress - LabConfig.SwapWarningProgress
 	if shouldWarn and self.swapWarningGate ~= gateIndex then
 		self.swapWarningGate = gateIndex
-		self.objective = "Red SWAP gate ahead — finish your current move."
+		self.objective = "Red SWAP gate ahead. Finish your current move."
 		self.telemetry:log("crew_swap_warning", "gate_" .. tostring(gateIndex))
-		self:toast("SWAP AHEAD — everyone rotates at the red signs.")
+		self:toast("SWAP AHEAD · everyone rotates at the red signs.")
 		self:_broadcastSnapshot()
 	elseif not shouldWarn and self.swapWarningGate == gateIndex then
 		self.swapWarningGate = nil
-		self.objective = "GO — get the load to the depot."
+		self.objective = "GO · get the load to the depot."
 		self:_broadcastSnapshot()
 	end
 end
@@ -583,17 +600,28 @@ function LabSession:_broadcastDebug()
 	local compression, grounded, surface, health = {}, {}, {}, {}
 	for index, id in PhysicsChassis.WheelOrder do
 		local wheel = chassisRig:getWheels()[id]
-		compression[index] = math.floor(wheel.compression * 100) / 100
-		grounded[index] = wheel.grounded
-		surface[index] = wheel.surface
+		if wheel then
+			compression[index] = math.floor((wheel.compression or 0) * 100) / 100
+			grounded[index] = wheel.grounded == true
+			surface[index] = wheel.surface or "Air"
+		else
+			compression[index] = 0
+			grounded[index] = false
+			surface[index] = "Air"
+		end
 		health[index] = math.floor((chassisRig.suspensionHealth[id] or 1) * 100) / 100
 	end
 
 	local tension, strapHealth = {}, {}
 	for index, id in LabConfig.StrapOrder do
 		local strap = cargoLoad:getStrap(id)
-		tension[index] = math.floor(strap.tension * 100) / 100
-		strapHealth[index] = math.floor(strap.health)
+		if strap then
+			tension[index] = math.floor(strap.tension * 100) / 100
+			strapHealth[index] = math.floor(strap.health)
+		else
+			tension[index] = 0
+			strapHealth[index] = 0
+		end
 	end
 
 	local offset = cargoLoad.localOffset or Vector3.zero
@@ -679,16 +707,12 @@ function LabSession:_assignRoles()
 			self.telemetry:noteRole(player.Name, role)
 			self.analytics:roleAssigned(player, role)
 			if newlyAssigned[player.UserId] then
-				LabRemotes.fireClient(Net.Names.LabEvent, player, "Crew seat ready — you are " .. role .. ".")
+				LabRemotes.fireClient(Net.Names.LabEvent, player, "Crew seat ready. You are " .. role .. ".")
 			end
 		else
-			self.roles[player.UserId] = nil
-			crewCount -= 1
-			LabRemotes.fireClient(
-				Net.Names.LabEvent,
-				player,
-				"Crew attachment failed — spectating until a seat opens."
-			)
+			-- Keep the role. A Sit that is one beat early was wiping crew to
+			-- spectators who then could not press R.
+			LabRemotes.fireClient(Net.Names.LabEvent, player, "Seat not ready yet - holding your crew spot.")
 		end
 	end
 end
@@ -702,6 +726,7 @@ function LabSession:enterStaging()
 		self.variantRng:NextNumber()
 	)
 	local variant = self.runVariant
+	self.stepFailed = false
 	self.phase = "Staging"
 	self.phaseClock = 0
 	self.outcome = nil
@@ -710,8 +735,7 @@ function LabSession:enterStaging()
 	self.restartSeconds = LabConfig.RestartDelaySeconds
 	self.resultDuration = LabConfig.ResultDisplaySeconds
 	self.timeRemaining = variant.contract.timeLimit
-	self.objective =
-		string.format("Truck parked. Rolls in %ds. Strappers pick a corner now.", LabConfig.RestartDelaySeconds)
+	self.objective = "Get ready."
 	self.contractComplete = nil
 	self.rewardMultiplier = variant.difficulty.rewardMultiplier
 	self.conditionTrend = "Stable"
@@ -720,30 +744,85 @@ function LabSession:enterStaging()
 	self.swapWarningGate = nil
 	self.swapHandoffUntil = 0
 	table.clear(self.announcedLandmarks)
-
-	self.chassisRig:reset()
-	self.cargoLoad:configure(variant.cargo)
-	self.cargoLoad:reset()
-	-- Prep is a parked state, not eight seconds of the suspension settling.
-	-- Freeze both physical assemblies after placing them at loaded ride height;
-	-- seats remain usable because they are welded to the anchored chassis.
-	self.chassisRig:setFrozen(true)
-	self.cargoLoad:setFrozen(true)
-	self.stations:reset()
-	self.director:configure(variant.difficulty)
-	self.director:reset()
-	self.telemetry:reset()
 	table.clear(self.driveInputs)
 
-	self:_assignRoles()
-	self:_applyDriverPaint()
+	-- reset() keeps both assemblies frozen through the teleport/reseat so a
+	-- wreck in the void cannot fling parts for a solver frame before freeze.
+	local ok, err = xpcall(function()
+		self.chassisRig:reset()
+		self.cargoLoad:configure(variant.cargo)
+		self.cargoLoad:reset()
+		self.chassisRig:setFrozen(true)
+		self.cargoLoad:setFrozen(true)
+		self.stations:reset()
+		self.director:configure(variant.difficulty)
+		self.director:reset()
+		self.telemetry:reset()
+		self:_assignRoles()
+		self:_applyDriverPaint()
+	end, debug.traceback)
+	if not ok then
+		self.stepFailed = true
+		warn("[CargoLab] enterStaging failed.\n" .. tostring(err))
+		self:toast("Simulation error. Press R to restart.")
+		return
+	end
+
 	-- Assign can attach a fresh slot without a successful Sit (character still
 	-- assembling). One deferred recover catches that without delaying the phase.
 	task.defer(function()
-		if self.phase == "Staging" and self.stations then
+		if self.phase == "Staging" and self.stations and not self.stepFailed then
 			self.stations:recoverAll()
+			self:_recoverPendingCrew()
 		end
 	end)
+end
+
+--[[
+	Seat anyone who still holds a role but has no living Occupant, once the
+	truck is in a safe attach band. Covers Result→Staging respawns and Sit
+	attempts that were one beat early. Throttled: must not fight throw recovery
+	or claimOwnership Sit flicker every Heartbeat.
+]]
+function LabSession:_recoverPendingCrew()
+	if not self.stations or not self.chassisRig or self.stepFailed then
+		return
+	end
+	local now = os.clock()
+	if now - (self.lastPendingRecoverAt or 0) < 0.75 then
+		return
+	end
+	local chassis = self.chassisRig:getChassis()
+	if not chassis then
+		return
+	end
+	if
+		not LabRespawnPolicy.shouldAttach(self.phase, self.chassisRig:isWrecked(), chassis.Position.Y, LabConfig.VoidY)
+	then
+		return
+	end
+
+	local neededRecover = false
+	for _, player in Players:GetPlayers() do
+		local role = self.roles[player.UserId]
+		if not role then
+			continue
+		end
+		local slot = self.stations:getSlot(player)
+		if not slot then
+			self.lastPendingRecoverAt = now
+			if self.stations:attach(player, role) then
+				self.telemetry:noteRole(player.Name, role)
+				self.analytics:roleAssigned(player, role)
+			end
+		elseif slot.respawnBlocked then
+			neededRecover = true
+		end
+	end
+	if neededRecover then
+		self.lastPendingRecoverAt = now
+		self.stations:recoverAll()
+	end
 end
 
 function LabSession:enterRun()
@@ -753,6 +832,12 @@ function LabSession:enterRun()
 	self.chassisRig:setFrozen(false)
 	self.chassisRig:claimOwnership()
 	self.cargoLoad:claimOwnership()
+	-- Ownership reclaim can drop SeatWelds; reseat before the first drive tick
+	-- so the Driver is Occupant and isOffTruck cannot latch forced braking.
+	if self.stations then
+		self.stations:recoverAll()
+	end
+	table.clear(self.driveInputs)
 	self.phase = "Run"
 	self.phaseClock = 0
 	self.runIndex += 1
@@ -781,6 +866,20 @@ function LabSession:enterRun()
 	self:toast(opener)
 end
 
+function LabSession:_finishRun(outcome: string, saved: boolean, crew: { Player }, endCause: string)
+	local variant = self.runVariant
+	local summary = self.telemetry:finish(outcome, saved, {
+		routeProgress = if self.chassisRig then self.chassisRig:getRouteProgress() else 0,
+		cargoReadout = if self.cargoLoad then self.cargoLoad.readout else 0,
+		chassisIntegrity = if self.chassisRig then self.chassisRig:getIntegrity() else 0,
+		variantKey = if variant
+			then string.format("%s/%s/%s", variant.cargo.id, variant.contract.id, variant.difficulty.id)
+			else "unknown",
+		endCause = endCause,
+	})
+	self.analytics:runFinished(outcome, crew, summary)
+end
+
 function LabSession:enterResult(result: string, saved: boolean)
 	if self.phase == "Result" then
 		return
@@ -794,6 +893,10 @@ function LabSession:enterResult(result: string, saved: boolean)
 	local chassisIntegrity = if self.chassisRig then self.chassisRig:getIntegrity() else 0
 	self.contractComplete = RunVariants.contractMet(self.runVariant, result, cargoReadout)
 	self.rewardMultiplier = RunVariants.rewardMultiplier(self.runVariant, self.contractComplete)
+	self.outcomeCause = nil
+	if result == "TruckWrecked" and self.chassisRig then
+		self.outcomeCause = self.chassisRig.lastCause
+	end
 	-- Preserve the visible result without letting a falling wreck cross Roblox's
 	-- destruction height during the feedback window. Staging unfreezes both.
 	self.chassisRig:setFrozen(true)
@@ -806,51 +909,44 @@ function LabSession:enterResult(result: string, saved: boolean)
 			self.analytics:creditsEarned(player, reward)
 		end
 	end
-	self.analytics:runFinished(result, crew)
+	self:_finishRun(result, saved, crew, RunCauses.bucket(result, self.outcomeCause))
 	self.resultDuration = if self.analytics:anyFeedbackNeeded(crew)
 		then LabConfig.FeedbackResultDisplaySeconds
 		else LabConfig.ResultDisplaySeconds
 	self.restartSeconds = self.resultDuration
 
-	self.outcomeCause = nil
-	if result == "TruckWrecked" and self.chassisRig then
-		self.outcomeCause = self.chassisRig.lastCause
-	end
-
-	local headline = if result == "Delivered"
-		then "Clean delivery."
-		elseif result == "PartialLoss" then "Delivered, but the load took a beating."
-		elseif result == "CargoLost" then "You lost the load."
-		elseif result == "TruckWrecked" then if self.outcomeCause == "fell"
-			then "Truck fell off the road."
-			elseif self.outcomeCause == "rolled" then "Truck rolled over."
-			elseif self.outcomeCause == "impact" then "Truck took too hard a hit."
-			else "Truck is finished."
-		else "Ran out of road time."
-	self.objective = headline
-	self:toast(headline .. " Restarting shortly, or press R.")
-
-	self.telemetry:finish(result, saved)
+	self.objective = "Run over."
 end
 
 function LabSession:_evaluateDelivery()
 	local chassis = self.chassisRig:getChassis()
-	local flat = Vector3.new(chassis.Position.X, 0, chassis.Position.Z)
-	local target = Vector3.new(self.route.deliveryPosition.X, 0, self.route.deliveryPosition.Z)
-	if (flat - target).Magnitude > 20 or self.chassisRig:getSpeed() > 14 then
+	if not chassis or not chassis.Parent then
+		return
+	end
+	local pos = chassis.Position
+	local target = self.route.deliveryPosition
+	local dx = pos.X - target.X
+	local dz = pos.Z - target.Z
+	local radius = LabConfig.DeliveryAcceptRadius
+	if dx * dx + dz * dz > radius * radius or self.chassisRig:getSpeed() > LabConfig.DeliveryMaxSpeed then
 		return
 	end
 
 	local broken = 0
 	for _, id in LabConfig.StrapOrder do
-		if self.cargoLoad:getStrap(id).broken then
+		local strap = self.cargoLoad:getStrap(id)
+		if strap and strap.broken then
 			broken += 1
 		end
 	end
 
 	if self.cargoLoad.condition == "Lost" then
 		self:enterResult("CargoLost", false)
-	elseif broken > 0 or self.cargoLoad.offset > LabConfig.SlidingOffset or self.cargoLoad.readout < 62 then
+	elseif
+		broken > 0
+		or self.cargoLoad.offset > LabConfig.SlidingOffset
+		or self.cargoLoad.readout < LabConfig.DeliveryCleanReadout
+	then
 		self:enterResult("PartialLoss", true)
 	else
 		self:enterResult("Delivered", true)
@@ -882,15 +978,21 @@ function LabSession:step(dt: number)
 	self.stations:step(dt)
 
 	if self.phase == "Run" then
+		self:_recoverPendingCrew()
 		self:_stepRun(dt, input)
 	elseif self.phase == "Staging" then
 		self.restartSeconds = math.max(0, LabConfig.RestartDelaySeconds - self.phaseClock)
-		local seconds = math.ceil(self.restartSeconds)
-		self.objective = if seconds > 0
-			then string.format("Truck parked. Rolls in %ds. Strappers pick a corner now.", seconds)
-			else "Go!"
+		self:_recoverPendingCrew()
 		if #Players:GetPlayers() > 0 and self.phaseClock >= LabConfig.RestartDelaySeconds then
-			self:enterRun()
+			self:_assignRoles()
+			self:_recoverPendingCrew()
+			if self:currentDriver() then
+				self:enterRun()
+			else
+				-- Hold GO rather than rolling an empty truck for a full contract.
+				self.phaseClock = LabConfig.RestartDelaySeconds - 1
+				self.objective = "Waiting for a driver seat..."
+			end
 		end
 	elseif self.phase == "Result" then
 		self.restartSeconds = math.max(0, self.resultDuration - self.phaseClock)
@@ -999,7 +1101,11 @@ function LabSession:_stepRun(dt: number, input)
 	elseif self.timeRemaining <= 0 then
 		self:enterResult("TimeExpired", self.cargoLoad.condition ~= "Lost")
 	else
-		self:_evaluateDelivery()
+		self.deliveryAccumulator += dt
+		if self.deliveryAccumulator >= DELIVERY_CHECK_INTERVAL then
+			self.deliveryAccumulator = 0
+			self:_evaluateDelivery()
+		end
 	end
 end
 
@@ -1022,6 +1128,14 @@ function LabSession:_bindRemotes()
 		if math.abs(drive.throttle) > 0.05 or math.abs(drive.steering) > 0.05 or drive.braking then
 			self.telemetry:noteInput(player.Name)
 			self.analytics:noteInput(player, "Driver")
+		end
+		if drive.sentAt then
+			-- GetServerTimeNow is synchronized across client and server. Small
+			-- negative jitter is clamped; implausible/fabricated ages are ignored.
+			local inputAge = Workspace:GetServerTimeNow() - drive.sentAt
+			if inputAge >= -0.05 and inputAge <= 10 then
+				self.telemetry:noteDriveInputAge(math.max(0, inputAge))
+			end
 		end
 
 		self.driveInputs[player.UserId] = {
@@ -1125,23 +1239,24 @@ function LabSession:_bindRemotes()
 		if not self.actionLimiter:allow(player) then
 			return
 		end
-		if not self.roles[player.UserId] then
-			LabRemotes.fireClient(Net.Names.LabEvent, player, "Spectators cannot reset the crew's run.")
-			return
-		end
 
-		-- A restart is also the way back from a halted simulation, so the latch
-		-- clears before the usual "already staging, nothing to do" guard.
+		-- Anyone may clear a halted sim. Role-wipe after a bad Sit used to leave
+		-- only spectators, who could not press R, soft-locking the playtest.
 		if self.stepFailed then
 			if self.phase == "Run" then
-				self.telemetry:finish("Abandoned", false)
-				self.analytics:runFinished("Abandoned", self:_crewPlayers())
+				self:_finishRun("Abandoned", false, self:_crewPlayers(), "SimulationError")
 			end
 			self.stepFailed = false
 			self:enterStaging()
 			self:toast(player.Name .. " restarted after an error.")
 			return
 		end
+
+		if not self.roles[player.UserId] then
+			LabRemotes.fireClient(Net.Names.LabEvent, player, "Spectators cannot reset the crew's run.")
+			return
+		end
+
 		if self.phase == "Staging" then
 			-- Staging with a stranded avatar is the stuck state players hit after
 			-- a bad Sit. Recover seats instead of refusing the input.
@@ -1154,8 +1269,8 @@ function LabSession:_bindRemotes()
 			return
 		end
 		if self.phase == "Run" then
-			self.telemetry:finish("Abandoned", false)
-			self.analytics:runFinished("Abandoned", self:_crewPlayers())
+			self.telemetry:noteManualReset()
+			self:_finishRun("Abandoned", false, self:_crewPlayers(), "ManualReset")
 		end
 		self:enterStaging()
 		self:toast(player.Name .. " reset the run.")
@@ -1177,7 +1292,7 @@ function LabSession:_bindRemotes()
 
 		local role = self.roles[player.UserId]
 		if not role then
-			LabRemotes.fireClient(Net.Names.LabEvent, player, "Crew full — you are spectating until a seat opens.")
+			LabRemotes.fireClient(Net.Names.LabEvent, player, "Crew full. Spectating until a seat opens.")
 			return
 		end
 		if role == "Driver" then
@@ -1216,7 +1331,7 @@ function LabSession:_bindRemotes()
 			return
 		end
 		if self.analytics:submitFeedback(player, feedback.answer) then
-			LabRemotes.fireClient(Net.Names.LabEvent, player, "Feedback saved — thank you.")
+			LabRemotes.fireClient(Net.Names.LabEvent, player, "Feedback saved. Thank you.")
 			self:_broadcastSnapshot()
 		end
 	end))
@@ -1272,11 +1387,7 @@ function LabSession:_onCharacter(player: Player, character: Model)
 			LabRemotes.fireClient(
 				Net.Names.LabEvent,
 				player,
-				string.format(
-					"Crew full (%d/%d) — spectating until a seat opens.",
-					LabConfig.MaxCrew,
-					LabConfig.MaxCrew
-				)
+				string.format("Crew full (%d/%d). Spectating until a seat opens.", LabConfig.MaxCrew, LabConfig.MaxCrew)
 			)
 			self:_broadcastSnapshot()
 			return
@@ -1295,7 +1406,8 @@ function LabSession:_onCharacter(player: Player, character: Model)
 		return
 	end
 	if not self.stations:attach(player, self.roles[player.UserId]) then
-		self.roles[player.UserId] = nil
+		LabRemotes.fireClient(Net.Names.LabEvent, player, "Seat not ready yet - holding your crew spot.")
+		self:_broadcastSnapshot()
 		return
 	end
 	self.telemetry:noteRole(player.Name, self.roles[player.UserId])
@@ -1365,6 +1477,9 @@ function LabSession:_bindHeartbeat()
 		end, debug.traceback)
 		if not ok then
 			self.stepFailed = true
+			if self.phase == "Run" then
+				self.telemetry:noteSimulationError("heartbeat_step")
+			end
 			warn("[CargoLab] step error, simulation halted. Press R to restart.\n" .. tostring(err))
 			self:toast("Simulation error. Press R to restart.")
 		end

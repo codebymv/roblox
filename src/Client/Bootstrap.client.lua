@@ -5,6 +5,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local DevConfig = require(Shared:WaitForChild("DevConfig"))
 
+-- FunTest and Depot mount different HUDs; Shared/Net still carries both remote
+-- surfaces. Keep device helpers (DeviceInput) shared so platform chrome stays aligned.
 if DevConfig.isFunTest() then
 	local DebugOverlay = require(script.Parent:WaitForChild("DebugOverlay"))
 	local LabMusic = require(script.Parent:WaitForChild("LabMusic"))

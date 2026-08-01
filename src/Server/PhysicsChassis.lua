@@ -21,6 +21,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local LabConfig = require(Shared:WaitForChild("LabConfig"))
+local RunCauses = require(Shared:WaitForChild("RunCauses"))
 
 local WorldBuilder = require(script.Parent.WorldBuilder)
 
@@ -37,6 +38,10 @@ export type DriveInput = {
 
 local WHEEL_ORDER = { "FL", "FR", "RL", "RR" }
 
+-- Suspension ray direction; rebuilt only when LiveTuning changes rest length.
+local suspensionRayDir = Vector3.new(0, -LabConfig.SuspensionRestLength, 0)
+local suspensionRayRest = LabConfig.SuspensionRestLength
+
 local function weldTo(primary: BasePart, part: BasePart)
 	local weld = Instance.new("WeldConstraint")
 	weld.Part0 = primary
@@ -48,10 +53,31 @@ end
 	Roblox cylinders spin around local X. Build a wheel frame with X = axle
 	(lateral), Y = ground normal, Z = roll direction, then apply tread spin.
 ]]
+local function safeUnit(vector: Vector3, fallback: Vector3): Vector3
+	if vector.Magnitude < 1e-4 then
+		return fallback
+	end
+	return vector.Unit
+end
+
+-- math.clamp errors when max < min. Computed grip/spring budgets can go
+-- negative after a wreck/reset mass blip or a hostile LiveTuning edit.
+local function safeClamp(value: number, minValue: number, maxValue: number): number
+	if maxValue < minValue then
+		return minValue
+	end
+	return math.clamp(value, minValue, maxValue)
+end
+
+local function clampSymmetric(value: number, budget: number): number
+	local limit = math.max(0, budget)
+	return math.clamp(value, -limit, limit)
+end
+
 function PhysicsChassis:_wheelCFrame(center: Vector3, axle: Vector3, forward: Vector3, spin: number): CFrame
-	local xAxis = axle.Unit
-	local lookAxis = (forward - xAxis * forward:Dot(xAxis)).Unit
-	local yAxis = xAxis:Cross(lookAxis).Unit
+	local xAxis = safeUnit(axle, Vector3.xAxis)
+	local lookAxis = safeUnit(forward - xAxis * forward:Dot(xAxis), Vector3.zAxis)
+	local yAxis = safeUnit(xAxis:Cross(lookAxis), Vector3.yAxis)
 	-- CFrame.fromMatrix's third axis is BackVector, not LookVector. Passing the
 	-- forward vector here produced a reflected basis that could flip visually.
 	local cf = CFrame.fromMatrix(center, xAxis, yAxis, -lookAxis)
@@ -381,6 +407,9 @@ function PhysicsChassis:_build()
 		wheel.Anchored = true
 		wheel.CanCollide = false
 		wheel.CanQuery = false
+		-- Client WheelPresentation draws the visible tyre; keep the server target
+		-- invisible so a halted step never shows orphaned rubber floating mid-air.
+		wheel.Transparency = 1
 		wheel.CFrame = self:_mountWheelVisual(chassis.CFrame, offset, id == "FL" or id == "FR", 0)
 		wheel.Parent = model
 
@@ -390,13 +419,13 @@ function PhysicsChassis:_build()
 		hub.Size = Vector3.new(LabConfig.WheelWidth + 0.08, LabConfig.HubRadius * 2, LabConfig.HubRadius * 2)
 		hub.Color = Color3.fromRGB(175, 180, 186)
 		hub.Material = Enum.Material.Metal
-		hub.Anchored = false
+		hub.Anchored = true
 		hub.CanCollide = false
 		hub.CanQuery = false
 		hub.Massless = true
+		hub.Transparency = 1
 		hub.CFrame = wheel.CFrame
 		hub.Parent = wheel
-		weldTo(wheel, hub)
 
 		self.wheels[id] = {
 			id = id,
@@ -492,24 +521,28 @@ end
 
 function PhysicsChassis:damageSuspension(wheelId: string, amount: number)
 	local current = self.suspensionHealth[wheelId] or 1
-	self.suspensionHealth[wheelId] = math.clamp(current - amount, 0.15, 1)
+	self.suspensionHealth[wheelId] = safeClamp(current - amount, 0.15, 1)
 end
 
 function PhysicsChassis:degradeSteering(amount: number)
 	-- Floor raised so "vague steering" means sluggish, not hair-trigger snap.
-	self.steeringHealth = math.clamp(self.steeringHealth - amount, 0.45, 1)
+	self.steeringHealth = safeClamp(self.steeringHealth - amount, 0.45, 1)
 end
 
 function PhysicsChassis:repairSuspension(wheelId: string, amount: number)
 	local current = self.suspensionHealth[wheelId] or 1
-	self.suspensionHealth[wheelId] = math.clamp(current + amount, 0.15, 1)
+	self.suspensionHealth[wheelId] = safeClamp(current + amount, 0.15, 1)
 end
 
-function PhysicsChassis:applyImpactDamage(amount: number, cause: string)
+-- `cause` is a RunCauses identifier, not a sentence. It reaches both the
+-- analytics bucket and the player-facing wreck explanation, so a prose string
+-- passed here would silently drop out of one and mislabel the other.
+function PhysicsChassis:applyImpactDamage(amount: number, cause: RunCauses.WreckCause)
 	if amount <= 0 then
 		return
 	end
-	self.integrity = math.clamp(self.integrity - amount, 0, LabConfig.MaxChassisIntegrity)
+	local maxIntegrity = math.max(0, LabConfig.MaxChassisIntegrity)
+	self.integrity = safeClamp(self.integrity - amount, 0, maxIntegrity)
 	self.lastImpact = os.clock()
 	self.lastCause = cause
 	if self.integrity <= LabConfig.MinChassisIntegrity then
@@ -525,7 +558,8 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 
 	local cf = chassis.CFrame
 	local velocity = chassis.AssemblyLinearVelocity
-	local mass = chassis.AssemblyMass + extraMass
+	-- AssemblyMass can blip around freezes/reseats; never feed clamp a negative budget.
+	local mass = math.max(1, chassis.AssemblyMass + math.max(0, extraMass or 0))
 
 	--[[
 		Measured acceleration. Everything downstream (strap tension, the debug
@@ -538,7 +572,7 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 	]]
 	local rawAccel = (velocity - self.lastVelocity) / math.max(dt, 1 / 240)
 	self.lastVelocity = velocity
-	local blend = math.clamp(dt * 18, 0, 1)
+	local blend = safeClamp(dt * 18, 0, 1)
 	self.accelWorld = self.accelWorld:Lerp(rawAccel, blend)
 	self.lateralAccel = self.accelWorld:Dot(cf.RightVector)
 	self.longitudinalAccel = self.accelWorld:Dot(cf.LookVector)
@@ -555,13 +589,14 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 	local unexplained = rawAccel.Magnitude - budget
 	if unexplained > LabConfig.ImpactThreshold and os.clock() - self.lastImpact > 0.35 then
 		local damage = math.min(unexplained * dt * LabConfig.ImpactDamageScale, LabConfig.ImpactDamageCap)
-		self:applyImpactDamage(damage, "impact")
+		self:applyImpactDamage(damage, RunCauses.Wreck.Impact)
 	end
 
 	local forwardSpeed = velocity:Dot(cf.LookVector)
+	local minSteerFactor = safeClamp(LabConfig.MinSteerFactor, 0, 1)
 	local speedFactor =
-		math.clamp(1 - math.abs(forwardSpeed) / LabConfig.SteerSpeedFalloff, LabConfig.MinSteerFactor, 1)
-	local maxSteer = math.rad(LabConfig.MaxSteerAngleDeg) * speedFactor * self.steeringHealth
+		safeClamp(1 - math.abs(forwardSpeed) / math.max(LabConfig.SteerSpeedFalloff, 1), minSteerFactor, 1)
+	local maxSteer = math.rad(LabConfig.MaxSteerAngleDeg) * speedFactor * math.max(0, self.steeringHealth)
 
 	-- Pitch from the look vector: positive when the nose points downhill.
 	-- A small deadzone ignores flat-road noise so the soft cap never fights
@@ -580,38 +615,50 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 		leaves LookVector at (-1, 0, 0), which is -X, and +X is the truck's
 		right. Feeding the input straight in steered the truck the wrong way.
 	]]
-	local targetSteer = -math.clamp(input.steering, -1, 1) * maxSteer
+	local targetSteer = -safeClamp(input.steering, -1, 1) * maxSteer
 	-- Degraded steering slows how fast the wheels turn, not just how far they
 	-- can turn. Without this, a worn truck still snaps to max angle in one
 	-- frame and spins from a tap of A/D.
-	local steerRateScale = 0.4 + 0.6 * self.steeringHealth
-	local steerStep = math.rad(LabConfig.SteerRateDegPerSec) * dt * steerRateScale
-	self.steerAngle += math.clamp(targetSteer - self.steerAngle, -steerStep, steerStep)
+	local steerRateScale = 0.4 + 0.6 * math.max(0, self.steeringHealth)
+	local steerStep = math.max(0, math.rad(LabConfig.SteerRateDegPerSec) * dt * steerRateScale)
+	if steerStep > 0 then
+		self.steerAngle += clampSymmetric(targetSteer - self.steerAngle, steerStep)
+	else
+		self.steerAngle = targetSteer
+	end
 	self.turnSeverity = math.abs(self.steerAngle) / math.max(math.rad(LabConfig.MaxSteerAngleDeg), 0.001)
 
 	local stiffness, damping = self:_springRate(extraMass)
 	-- This is a per-wheel force. Capping against the whole truck mass made the
 	-- limiter four times looser than its name and comment promised, so a sharp
 	-- slab edge could turn damping force into a launch impulse.
-	local maxSpringForce = (mass / 4) * GRAVITY * LabConfig.SuspensionMaxForceScale
+	local maxSpringForce = math.max(0, (mass / 4) * GRAVITY * LabConfig.SuspensionMaxForceScale)
 	local groundedCount = 0
+	local restLength = LabConfig.SuspensionRestLength
+	if restLength ~= suspensionRayRest then
+		suspensionRayRest = restLength
+		suspensionRayDir = Vector3.new(0, -restLength, 0)
+	end
 
 	for _, id in WHEEL_ORDER do
 		local wheel = self.wheels[id]
+		if not wheel or not wheel.part or not wheel.part.Parent then
+			continue
+		end
 		local mountWorld = cf * wheel.offset
-		local result = workspace:Raycast(mountWorld, Vector3.new(0, -LabConfig.SuspensionRestLength, 0), self.rayParams)
+		local result = workspace:Raycast(mountWorld, suspensionRayDir, self.rayParams)
 
 		if result then
 			groundedCount += 1
 			local distance = (result.Position - mountWorld).Magnitude
-			local compression =
-				math.clamp((LabConfig.SuspensionRestLength - distance) / LabConfig.SuspensionRestLength, 0, 1)
+			local rest = math.max(LabConfig.SuspensionRestLength, 0.01)
+			local compression = safeClamp((rest - distance) / rest, 0, 1)
 			local health = self.suspensionHealth[id] or 1
 			local normal = result.Normal
 			local pointVelocity = chassis:GetVelocityAtPosition(mountWorld)
 			local springVelocity = pointVelocity:Dot(normal)
 
-			local force = math.clamp(stiffness * compression * health - damping * springVelocity, 0, maxSpringForce)
+			local force = safeClamp(stiffness * compression * health - damping * springVelocity, 0, maxSpringForce)
 			chassis:ApplyImpulseAtPosition(normal * force * dt, mountWorld)
 
 			local surfaceName = result.Instance:GetAttribute("LabSurface")
@@ -625,12 +672,8 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 			-- Contact-patch axes, flattened onto the surface the wheel is on.
 			local steerRotation = if wheel.steer then CFrame.Angles(0, self.steerAngle, 0) else CFrame.identity
 			local wheelLook = (cf * steerRotation).LookVector
-			local wheelForward = (wheelLook - normal * wheelLook:Dot(normal))
-			if wheelForward.Magnitude < 0.01 then
-				wheelForward = cf.LookVector
-			end
-			wheelForward = wheelForward.Unit
-			local wheelRight = wheelForward:Cross(normal).Unit
+			local wheelForward = safeUnit(wheelLook - normal * wheelLook:Dot(normal), cf.LookVector)
+			local wheelRight = safeUnit(wheelForward:Cross(normal), cf.RightVector)
 
 			--[[
 				Lateral grip, limited by this wheel's own normal load. This one
@@ -640,28 +683,27 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 			]]
 			local grip = if wheel.steer then LabConfig.GripFront else LabConfig.GripRear
 			local lateralVelocity = pointVelocity:Dot(wheelRight)
-			local desiredLateral = -lateralVelocity * grip * (mass / 4) * surface.grip
-			local gripBudget = force * LabConfig.GripLimitPerWheel * surface.grip
-			local lateralForce = math.clamp(desiredLateral, -gripBudget, gripBudget)
+			local surfaceGrip = math.max(0, surface.grip)
+			local desiredLateral = -lateralVelocity * grip * (mass / 4) * surfaceGrip
+			local gripBudget = math.max(0, force * LabConfig.GripLimitPerWheel * surfaceGrip)
+			local lateralForce = clampSymmetric(desiredLateral, gripBudget)
 			chassis:ApplyImpulseAtPosition(wheelRight * lateralForce * dt, mountWorld)
 
 			local longitudinal = 0
+			local along = pointVelocity:Dot(wheelForward)
 			if input.braking then
-				local along = pointVelocity:Dot(wheelForward)
 				longitudinal = -math.sign(along)
 					* math.min(math.abs(along) / math.max(dt, 1 / 240), LabConfig.BrakeAccel)
 					* (mass / 4)
-				longitudinal = math.clamp(longitudinal, -gripBudget, gripBudget)
+				longitudinal = clampSymmetric(longitudinal, gripBudget)
 			elseif wheel.drive and math.abs(input.throttle) > 0.05 then
 				local accelTarget = if input.throttle > 0 then LabConfig.EngineAccel else -LabConfig.ReverseAccel
 				local limit = if input.throttle > 0 then LabConfig.MaxForwardSpeed else -LabConfig.MaxReverseSpeed
 				local overspeed = if input.throttle > 0 then forwardSpeed > limit else forwardSpeed < limit
 				if not overspeed then
-					longitudinal =
-						math.clamp(accelTarget * math.abs(input.throttle) * (mass / 2), -gripBudget, gripBudget)
+					longitudinal = clampSymmetric(accelTarget * math.abs(input.throttle) * (mass / 2), gripBudget)
 				end
 			else
-				local along = pointVelocity:Dot(wheelForward)
 				-- Deadzone, or a parked truck oscillates around zero forever.
 				if math.abs(along) > LabConfig.SpeedDeadzone then
 					longitudinal = -math.sign(along) * LabConfig.CoastDecel * (mass / 4)
@@ -676,13 +718,12 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 			]]
 			if not input.braking and wheel.drive and downhillGrade > 0 and forwardSpeed > LabConfig.DownhillSoftCap then
 				local over = (forwardSpeed - LabConfig.DownhillSoftCap) / math.max(LabConfig.DownhillSoftCap, 1)
-				local strength = LabConfig.DownhillBrakeAccel * math.clamp(over, 0, 1.5) * (0.5 + downhillGrade)
+				local strength = LabConfig.DownhillBrakeAccel * safeClamp(over, 0, 1.5) * (0.5 + downhillGrade)
 				longitudinal -= strength * (mass / 2)
-				longitudinal = math.clamp(longitudinal, -gripBudget, gripBudget)
+				longitudinal = clampSymmetric(longitudinal, gripBudget)
 			end
 
 			-- Rolling resistance from the surface the wheel is actually on.
-			local along = pointVelocity:Dot(wheelForward)
 			if surface.resistance > 0 and math.abs(along) > LabConfig.SpeedDeadzone then
 				longitudinal -= math.sign(along) * surface.resistance * (mass / 4)
 			end
@@ -693,19 +734,27 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 			wheel.spin += (along / LabConfig.WheelRadius) * dt
 
 			local center = result.Position + normal * LabConfig.WheelRadius
-			wheel.part.CFrame = self:_wheelCFrame(center, wheelRight, wheelForward, wheel.spin)
+			local wheelCF = self:_wheelCFrame(center, wheelRight, wheelForward, wheel.spin)
+			wheel.part.CFrame = wheelCF
+			if wheel.hub and wheel.hub.Parent then
+				wheel.hub.CFrame = wheelCF
+			end
 		else
 			wheel.grounded = false
 			wheel.compression = 0
 			wheel.normalForce = 0
 			wheel.surface = "Air"
-			wheel.part.CFrame = self:_mountWheelVisual(
+			local wheelCF = self:_mountWheelVisual(
 				cf,
 				wheel.offset,
 				wheel.steer,
 				wheel.spin,
 				LabConfig.SuspensionRestLength - LabConfig.WheelRadius
 			)
+			wheel.part.CFrame = wheelCF
+			if wheel.hub and wheel.hub.Parent then
+				wheel.hub.CFrame = wheelCF
+			end
 		end
 	end
 
@@ -716,10 +765,11 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 	-- Raycast vehicles accumulate a slow yaw drift with no real tyre contact
 	-- patch to resist it. Damp only yaw so roll and pitch stay expressive.
 	local angular = chassis.AssemblyAngularVelocity
-	local damped = angular.Y * (1 - math.clamp(LabConfig.YawDamping * dt, 0, 1))
-	if angular.Magnitude > LabConfig.MaxAngularSpeed then
-		angular = angular.Unit * LabConfig.MaxAngularSpeed
-		damped = math.clamp(damped, -LabConfig.MaxAngularSpeed, LabConfig.MaxAngularSpeed)
+	local damped = angular.Y * (1 - safeClamp(LabConfig.YawDamping * dt, 0, 1))
+	local maxSpin = math.max(0, LabConfig.MaxAngularSpeed)
+	if angular.Magnitude > maxSpin and maxSpin > 0 then
+		angular = angular.Unit * maxSpin
+		damped = clampSymmetric(damped, maxSpin)
 	end
 	chassis.AssemblyAngularVelocity = Vector3.new(angular.X, damped, angular.Z)
 
@@ -729,11 +779,11 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 
 	-- Rollover: not a threshold on a meter, just the truck being upside down
 	-- for long enough that nobody is getting it back.
-	if cf.UpVector:Dot(Vector3.yAxis) < 0.15 then
+	if cf.UpVector:Dot(Vector3.yAxis) < LabConfig.RolloverUpDot then
 		self.invertedFor += dt
-		if self.invertedFor > 1.6 and not self.wrecked then
+		if self.invertedFor > LabConfig.RolloverSeconds and not self.wrecked then
 			self.wrecked = true
-			self.lastCause = "rolled"
+			self.lastCause = RunCauses.Wreck.Rolled
 		end
 	else
 		self.invertedFor = 0
@@ -741,30 +791,50 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 
 	if chassis.Position.Y < LabConfig.VoidY then
 		self.wrecked = true
-		self.lastCause = "fell"
+		self.lastCause = RunCauses.Wreck.Fell
 	end
 end
 
 function PhysicsChassis:getSpeed(): number
-	return self.chassis.AssemblyLinearVelocity.Magnitude
+	local chassis = self.chassis
+	if not chassis or not chassis.Parent then
+		return 0
+	end
+	return chassis.AssemblyLinearVelocity.Magnitude
 end
 
 function PhysicsChassis:getForwardSpeed(): number
-	return self.chassis.AssemblyLinearVelocity:Dot(self.chassis.CFrame.LookVector)
+	local chassis = self.chassis
+	if not chassis or not chassis.Parent then
+		return 0
+	end
+	return chassis.AssemblyLinearVelocity:Dot(chassis.CFrame.LookVector)
 end
 
 function PhysicsChassis:getRouteProgress(): number
-	return WorldBuilder.labProgress(self.route, self.chassis.Position)
+	local chassis = self.chassis
+	if not chassis or not chassis.Parent then
+		return 0
+	end
+	return WorldBuilder.labProgress(self.route, chassis.Position)
 end
 
 function PhysicsChassis:getRollDegrees(): number
-	local cf = self.chassis.CFrame
-	return math.deg(math.asin(math.clamp(cf.RightVector.Y, -1, 1)))
+	local chassis = self.chassis
+	if not chassis or not chassis.Parent then
+		return 0
+	end
+	local cf = chassis.CFrame
+	return math.deg(math.asin(safeClamp(cf.RightVector.Y, -1, 1)))
 end
 
 function PhysicsChassis:getPitchDegrees(): number
-	local cf = self.chassis.CFrame
-	return math.deg(math.asin(math.clamp(cf.LookVector.Y, -1, 1)))
+	local chassis = self.chassis
+	if not chassis or not chassis.Parent then
+		return 0
+	end
+	local cf = chassis.CFrame
+	return math.deg(math.asin(safeClamp(cf.LookVector.Y, -1, 1)))
 end
 
 function PhysicsChassis:isWrecked(): boolean
@@ -779,6 +849,24 @@ function PhysicsChassis:getWheels()
 	return self.wheels
 end
 
+function PhysicsChassis:_snapWheelVisuals()
+	local chassis = self.chassis
+	if not chassis or not chassis.Parent then
+		return
+	end
+	local cf = chassis.CFrame
+	for _, id in WHEEL_ORDER do
+		local wheel = self.wheels[id]
+		if wheel and wheel.part and wheel.part.Parent then
+			local wheelCF = self:_mountWheelVisual(cf, wheel.offset, wheel.steer, wheel.spin)
+			wheel.part.CFrame = wheelCF
+			if wheel.hub and wheel.hub.Parent then
+				wheel.hub.CFrame = wheelCF
+			end
+		end
+	end
+end
+
 function PhysicsChassis:setFrozen(frozen: boolean)
 	local chassis = self.chassis
 	if not chassis or not chassis.Parent then
@@ -787,6 +875,15 @@ function PhysicsChassis:setFrozen(frozen: boolean)
 	chassis.AssemblyLinearVelocity = Vector3.zero
 	chassis.AssemblyAngularVelocity = Vector3.zero
 	chassis.Anchored = frozen
+	if frozen then
+		-- Clear measured accel so StrapperStations cannot throw crew during Result
+		-- using the last cornering spike from the wreck frame.
+		self.accelWorld = Vector3.zero
+		self.lateralAccel = 0
+		self.longitudinalAccel = 0
+		self.brakeForce = 0
+		self:_snapWheelVisuals()
+	end
 end
 
 function PhysicsChassis:setPaintColor(color: Color3)
@@ -822,7 +919,9 @@ function PhysicsChassis:teleport(cframe: CFrame)
 end
 
 function PhysicsChassis:reset()
-	self:setFrozen(false)
+	-- Stay frozen across the teleport. Unfreezing a wreck mid-void for even one
+	-- solver step is what flings hubs, seats, and the load across the sky.
+	self:setFrozen(true)
 	self:teleport(self.route.startCFrame)
 
 	self.steerAngle = 0
@@ -830,6 +929,7 @@ function PhysicsChassis:reset()
 	self.wrecked = false
 	self.invertedFor = 0
 	self.lastVelocity = Vector3.zero
+	self.accelWorld = Vector3.zero
 	self.lateralAccel = 0
 	self.longitudinalAccel = 0
 	self.turnSeverity = 0
@@ -842,8 +942,13 @@ function PhysicsChassis:reset()
 		local wheel = self.wheels[id]
 		if wheel then
 			wheel.spin = 0
+			wheel.grounded = false
+			wheel.compression = 0
+			wheel.normalForce = 0
+			wheel.surface = "Road"
 		end
 	end
+	self:_snapWheelVisuals()
 end
 
 function PhysicsChassis:destroy()

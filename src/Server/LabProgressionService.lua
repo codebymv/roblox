@@ -14,6 +14,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 
 local LabProgression = require(Shared:WaitForChild("LabProgression"))
 local RoleKits = require(Shared:WaitForChild("RoleKits"))
+local Types = require(Shared:WaitForChild("Types"))
 
 local EconomyService = require(script.Parent.EconomyService)
 local PlayerDataService = require(script.Parent.PlayerDataService)
@@ -26,7 +27,33 @@ export type Snapshot = {
 	unlockedPaints: { [string]: boolean },
 }
 
+local NOT_READY: Snapshot = {
+	ready = false,
+	saving = false,
+	credits = 0,
+	equippedPaint = "Factory",
+	unlockedPaints = { Factory = true },
+}
+
+-- Unlocked-paint tables are rebuilt only when a purchase/unlock lands. Credits
+-- and equipped paint still refresh every snapshot read.
+local unlockedByUser: { [number]: { [string]: boolean } } = {}
+
 local LabProgressionService = {}
+
+local function buildUnlocked(profile: Types.ProfileData): { [string]: boolean }
+	local unlocked: { [string]: boolean } = {}
+	for _, paint in RoleKits.getAllPaints() do
+		if paint.cost <= 0 or profile.unlockedPaints[paint.id] then
+			unlocked[paint.id] = true
+		end
+	end
+	return unlocked
+end
+
+function LabProgressionService.invalidatePaints(player: Player)
+	unlockedByUser[player.UserId] = nil
+end
 
 function LabProgressionService.awardRun(
 	player: Player,
@@ -66,20 +93,13 @@ end
 function LabProgressionService.snapshot(player: Player): Snapshot
 	local profile = PlayerDataService.get(player)
 	if not profile then
-		return {
-			ready = false,
-			saving = false,
-			credits = 0,
-			equippedPaint = "Factory",
-			unlockedPaints = { Factory = true },
-		}
+		return NOT_READY
 	end
 
-	local unlocked: { [string]: boolean } = {}
-	for _, paint in RoleKits.getAllPaints() do
-		if paint.cost <= 0 or profile.unlockedPaints[paint.id] then
-			unlocked[paint.id] = true
-		end
+	local unlocked = unlockedByUser[player.UserId]
+	if not unlocked then
+		unlocked = buildUnlocked(profile)
+		unlockedByUser[player.UserId] = unlocked
 	end
 
 	local equippedPaint = if RoleKits.getPaint(profile.equippedPaint) then profile.equippedPaint else "Factory"
@@ -112,7 +132,11 @@ function LabProgressionService.selectPaint(player: Player, paintId: string): (bo
 		end
 		return EconomyService.equipPaint(player, paintId)
 	end
-	return EconomyService.purchasePaint(player, paintId)
+	local ok, message = EconomyService.purchasePaint(player, paintId)
+	if ok then
+		LabProgressionService.invalidatePaints(player)
+	end
+	return ok, message
 end
 
 function LabProgressionService.paintColorFor(player: Player?): Color3

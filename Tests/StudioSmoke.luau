@@ -77,6 +77,23 @@ local function checkShared()
 	local feedback = LabRemotes.validate(Net.Names.LabFeedback, "Yes")
 	assert(feedback and feedback.answer == "Yes", "Valid playtest feedback was rejected")
 	assert(LabRemotes.validate(Net.Names.LabFeedback, "Definitely") == nil, "Unknown feedback must be rejected")
+	local drive = LabRemotes.validate(Net.Names.LabDrive, {
+		throttle = 1,
+		steering = -0.5,
+		braking = false,
+		sentAt = Workspace:GetServerTimeNow(),
+	})
+	assert(drive and drive.sentAt, "Timestamped drive input was rejected")
+	assert(
+		LabRemotes.validate(Net.Names.LabDrive, { throttle = 0, steering = 0, braking = false }),
+		"Drive input without a timestamp must remain compatible during rolling publishes"
+	)
+	assert(LabRemotes.validate(Net.Names.LabDrive, {
+		throttle = 0,
+		steering = 0,
+		braking = false,
+		sentAt = 0 / 0,
+	}) == nil, "Non-finite drive timestamp must be rejected")
 	local paint = LabRemotes.validate(Net.Names.LabPaint, "DepotGrey")
 	assert(paint and paint.paintId == "DepotGrey", "Known paint was rejected")
 	assert(LabRemotes.validate(Net.Names.LabPaint, "ExploitGold") == nil, "Unknown paint must be rejected")

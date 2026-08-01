@@ -32,7 +32,9 @@ local DevConfig = {
 	-- accelerations, suspension state. Turn off before showing anyone.
 	ShowDebugOverlay = settings.ShowDebugOverlay,
 
-	-- In-memory run telemetry, printed to the server log on every run end.
+	-- Run telemetry. Development prints the timeline and may write a Studio
+	-- artifact; Release sends only the compact anonymous summary through
+	-- AnalyticsService.
 	Telemetry = settings.Telemetry,
 
 	-- Mirrors the tunable half of LabConfig onto attributes of a folder in

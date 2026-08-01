@@ -7,8 +7,13 @@ boots by default, so the list is sorted by whether it is worth your time today.
 
 | Doc | Read it for |
 |---|---|
-| [CoreFunAudit_V0.md](CoreFunAudit_V0.md) | Why the depot prototype was not producing the fantasy, and what the fun-test build changed. The single most useful file here. |
 | [PlaytestProtocol_V0.md](PlaytestProtocol_V0.md) | The four-player test script, what not to explain to testers, and the go/no-go criteria. This is the next thing that happens to the project. |
+
+## Historical diagnosis
+
+| Doc | Read it for | Do not use it for |
+|---|---|---|
+| [CoreFunAudit_V0.md](CoreFunAudit_V0.md) | Why the original Depot prototype was not producing the fantasy, and why the physics-first fun-test replaced it | Assessing current solo play, role activity, cargo physics, or the active session loop |
 
 ## Current in part
 

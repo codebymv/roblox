@@ -10,7 +10,10 @@
 ]]
 
 local AnalyticsService = game:GetService("AnalyticsService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+
+local LabTypes = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("LabTypes"))
 
 type PlayerState = {
 	joinedAt: number,
@@ -46,6 +49,7 @@ function LabAnalytics.new()
 		players = {} :: { [number]: PlayerState },
 		currentRunIndex = 0,
 		runStartedAt = 0,
+		runStartedCrewSize = 0,
 		crisisRuns = {} :: { [number]: boolean },
 		warned = false,
 	}, LabAnalytics)
@@ -59,12 +63,12 @@ function LabAnalytics:_reportFailure(label: string, err: any)
 	warn(string.format("[CargoAnalytics] %s failed: %s", label, tostring(err)))
 end
 
-function LabAnalytics:_custom(player: Player, eventName: string, value: number)
+function LabAnalytics:_custom(player: Player, eventName: string, value: number, customFields: { [string]: string }?)
 	if not self.enabled then
 		return
 	end
 	local ok, err = pcall(function()
-		AnalyticsService:LogCustomEvent(player, eventName, value)
+		AnalyticsService:LogCustomEvent(player, eventName, value, customFields)
 	end)
 	if not ok then
 		self:_reportFailure(eventName, err)
@@ -135,6 +139,7 @@ end
 function LabAnalytics:runStarted(runIndex: number, crew: { Player })
 	self.currentRunIndex = runIndex
 	self.runStartedAt = os.clock()
+	self.runStartedCrewSize = #crew
 	for _, player in crew do
 		local state: PlayerState = self:_state(player)
 		state.runsStarted += 1
@@ -167,17 +172,52 @@ function LabAnalytics:creditsEarned(player: Player, amount: number)
 	self:_custom(player, "CargoCreditsEarned", math.max(0, amount))
 end
 
-function LabAnalytics:runFinished(outcome: string, crew: { Player })
+function LabAnalytics:runFinished(outcome: string, crew: { Player }, summary: LabTypes.RunSummary?)
 	local duration = math.max(0, os.clock() - self.runStartedAt)
 	local outcomeEvent = OUTCOME_EVENT[outcome] or "CargoRunFinishedOther"
+	local crewSize = if self.runStartedCrewSize == #crew
+		then tostring(#crew)
+		else string.format("%d->%d", self.runStartedCrewSize, #crew)
+	local fields = {
+		[Enum.AnalyticsCustomFieldKeys.CustomField01.Name] = "Outcome - " .. outcome,
+		[Enum.AnalyticsCustomFieldKeys.CustomField02.Name] = "Crew - " .. crewSize,
+		[Enum.AnalyticsCustomFieldKeys.CustomField03.Name] = "Variant - "
+			.. (if summary then summary.variantKey else "unknown"),
+	}
 	for _, player in crew do
 		local state: PlayerState = self:_state(player)
 		state.runsFinished += 1
-		self:_custom(player, outcomeEvent, 1)
-		self:_custom(player, "CargoRunDuration", duration)
+		self:_custom(player, outcomeEvent, 1, fields)
+		self:_custom(player, "CargoRunDuration", duration, fields)
 		if state.runsFinished == 1 then
 			self:_onboarding(player, 4, "First Run Finished")
 		end
+	end
+
+	-- AnalyticsService requires a Player, but these are run-level measurements.
+	-- Emit them once through one crew member so a four-player run is not counted
+	-- four times and weighted more heavily than a solo run.
+	local reporter = crew[1]
+	if summary and reporter then
+		self:_custom(reporter, "CargoRunProgressPct", summary.routeProgress * 100, fields)
+		self:_custom(reporter, "CargoRunCargoReadout", summary.cargoReadout, fields)
+		self:_custom(reporter, "CargoRunChassisIntegrity", summary.chassisIntegrity, fields)
+		self:_custom(reporter, "CargoRunStrapBreaks", summary.strapBreaks, fields)
+		self:_custom(reporter, "CargoRunStrapRefits", summary.strapRefits, fields)
+		self:_custom(reporter, "CargoRunRecoveries", summary.recoveries, fields)
+		self:_custom(reporter, "CargoRunThrows", summary.throws, fields)
+		self:_custom(reporter, "CargoRunCrewSwaps", summary.crewSwaps, fields)
+		self:_custom(reporter, "CargoRunManualResets", summary.manualResets, fields)
+		self:_custom(reporter, "CargoRunSimulationErrors", summary.simulationErrors, fields)
+		self:_custom(reporter, "CargoDriveInputAgeAverageMs", summary.driveInputAgeAverageMs, fields)
+		self:_custom(reporter, "CargoDriveInputAgeMaxMs", summary.driveInputAgeMaxMs, fields)
+		self:_custom(reporter, "CargoDriveInputAgeOver200Pct", summary.driveInputAgeOver200Pct, fields)
+		self:_custom(reporter, "CargoDriveInputAgeOver400Pct", summary.driveInputAgeOver400Pct, fields)
+		self:_custom(reporter, "CargoRunEndCause", 1, {
+			[Enum.AnalyticsCustomFieldKeys.CustomField01.Name] = "Cause - " .. summary.endCause,
+			[Enum.AnalyticsCustomFieldKeys.CustomField02.Name] = "Outcome - " .. outcome,
+			[Enum.AnalyticsCustomFieldKeys.CustomField03.Name] = "Crew - " .. crewSize,
+		})
 	end
 end
 

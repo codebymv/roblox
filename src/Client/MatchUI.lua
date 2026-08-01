@@ -20,12 +20,14 @@ local Net = require(Shared:WaitForChild("Net"))
 local Roles = require(Shared:WaitForChild("Roles"))
 local Types = require(Shared:WaitForChild("Types"))
 
+local DeviceInput = require(script.Parent.DeviceInput)
 local UIKit = require(script.Parent.UIKit)
 
 local MatchUI = {}
 
 local player = Players.LocalPlayer
 local gui: ScreenGui
+local root: Frame
 local phaseLabel: TextLabel
 local objectiveLabel: TextLabel
 local stackLabel: TextLabel
@@ -249,7 +251,10 @@ local function refresh()
 		pushButton.BackgroundTransparency = if snap.myVote == "Push" then 0 else 0.35
 	end
 
-	driveFrame.Visible = isLivePhase(snap.phase) and myRole == "Driver" and not spectating
+	driveFrame.Visible = isLivePhase(snap.phase)
+		and myRole == "Driver"
+		and not spectating
+		and DeviceInput.wantsTouchDrive()
 
 	local canAct = isLivePhase(snap.phase)
 		and not spectating
@@ -315,7 +320,7 @@ local function mountStatusPanel()
 		BackgroundColor3 = Color3.fromRGB(20, 22, 28),
 		BackgroundTransparency = 0.12,
 		CornerRadius = 12,
-		Parent = gui,
+		Parent = root,
 	})
 
 	local constraint = Instance.new("UISizeConstraint")
@@ -377,7 +382,7 @@ local function mountManifestCard()
 		BackgroundTransparency = 0.1,
 		Visible = false,
 		CornerRadius = 12,
-		Parent = gui,
+		Parent = root,
 	})
 
 	local padding = Instance.new("UIPadding")
@@ -419,7 +424,7 @@ local function mountFailureBanner()
 	failureLabel.TextColor3 = Color3.new(1, 1, 1)
 	failureLabel.TextWrapped = true
 	failureLabel.Visible = false
-	failureLabel.Parent = gui
+	failureLabel.Parent = root
 
 	local constraint = Instance.new("UISizeConstraint")
 	constraint.MaxSize = Vector2.new(680, 78)
@@ -445,7 +450,7 @@ local function mountEndcard()
 	endcardLabel.TextColor3 = Color3.new(1, 1, 1)
 	endcardLabel.TextWrapped = true
 	endcardLabel.Visible = false
-	endcardLabel.Parent = gui
+	endcardLabel.Parent = root
 
 	local constraint = Instance.new("UISizeConstraint")
 	constraint.MaxSize = Vector2.new(540, 150)
@@ -463,7 +468,7 @@ local function mountDriveControls()
 		Size = UDim2.fromScale(1, 1),
 		BackgroundTransparency = 1,
 		Visible = false,
-		Parent = gui,
+		Parent = root,
 	})
 
 	leftButton = makeButton(driveFrame, "Left", "<", UDim2.fromOffset(72, 72), Color3.fromRGB(55, 85, 135))
@@ -499,28 +504,28 @@ local function mountDriveControls()
 end
 
 local function mountMainButtons()
-	readyButton = makeButton(gui, "Ready", "READY", UDim2.fromOffset(230, 52), Color3.fromRGB(40, 150, 95))
+	readyButton = makeButton(root, "Ready", "READY", UDim2.fromOffset(230, 52), Color3.fromRGB(40, 150, 95))
 	readyButton.AnchorPoint = Vector2.new(0.5, 1)
 	readyButton.Position = UDim2.new(0.5, 0, 1, -104)
 
-	startButton = makeButton(gui, "Start", "ROLL OUT NOW", UDim2.fromOffset(230, 52), Color3.fromRGB(65, 120, 225))
+	startButton = makeButton(root, "Start", "ROLL OUT NOW", UDim2.fromOffset(230, 52), Color3.fromRGB(65, 120, 225))
 	startButton.AnchorPoint = Vector2.new(0.5, 1)
 	startButton.Position = UDim2.new(0.5, 0, 1, -44)
 
 	newConvoyButton =
-		makeButton(gui, "NewConvoy", "NEW CONVOY", UDim2.fromOffset(230, 52), Color3.fromRGB(65, 120, 225))
+		makeButton(root, "NewConvoy", "NEW CONVOY", UDim2.fromOffset(230, 52), Color3.fromRGB(65, 120, 225))
 	newConvoyButton.AnchorPoint = Vector2.new(0.5, 1)
 	newConvoyButton.Position = UDim2.new(0.5, 0, 1, -44)
 
-	bankButton = makeButton(gui, "Bank", "BANK", UDim2.fromOffset(196, 62), Color3.fromRGB(40, 150, 95))
+	bankButton = makeButton(root, "Bank", "BANK", UDim2.fromOffset(196, 62), Color3.fromRGB(40, 150, 95))
 	bankButton.AnchorPoint = Vector2.new(1, 1)
 	bankButton.Position = UDim2.new(0.5, -8, 1, -44)
 
-	pushButton = makeButton(gui, "Push", "PUSH", UDim2.fromOffset(196, 62), Color3.fromRGB(215, 110, 40))
+	pushButton = makeButton(root, "Push", "PUSH", UDim2.fromOffset(196, 62), Color3.fromRGB(215, 110, 40))
 	pushButton.AnchorPoint = Vector2.new(0, 1)
 	pushButton.Position = UDim2.new(0.5, 8, 1, -44)
 
-	actionButton = makeButton(gui, "Action", "HOLD TO FIX", UDim2.new(1, -36, 0, 68), Color3.fromRGB(230, 130, 40))
+	actionButton = makeButton(root, "Action", "HOLD TO FIX", UDim2.new(1, -36, 0, 68), Color3.fromRGB(230, 130, 40))
 	actionButton.AnchorPoint = Vector2.new(0.5, 1)
 	actionButton.Position = UDim2.new(0.5, 0, 1, -110)
 
@@ -530,28 +535,56 @@ local function mountMainButtons()
 	actionConstraint.Parent = actionButton
 end
 
+local cachedCrewBody: BasePart? = nil
+local cachedCrewBay: number? = nil
+
 local function findCrewTruck(bayIndex: number): BasePart?
+	if cachedCrewBody and cachedCrewBody.Parent and cachedCrewBay == bayIndex then
+		return cachedCrewBody
+	end
 	local prototype = Workspace:FindFirstChild("CargoPrototype")
 	local lane = prototype and prototype:FindFirstChild("Lane" .. tostring(bayIndex))
 	local truck = lane and lane:FindFirstChild("CargoTruck")
 	local body = truck and truck:FindFirstChild("Body")
-	return if body and body:IsA("BasePart") then body else nil
+	cachedCrewBody = if body and body:IsA("BasePart") then body else nil
+	cachedCrewBay = bayIndex
+	return cachedCrewBody
+end
+
+local function clearDriveInput()
+	keyForward, keyReverse, keyLeft, keyRight, keyBrake = false, false, false, false, false
+	touchForward, touchReverse, touchLeft, touchRight, touchBrake = false, false, false, false, false
+	stopActionHold()
 end
 
 local function bindInputs()
 	UserInputService.InputBegan:Connect(function(input: InputObject, processed: boolean)
-		if processed then
+		local code = input.KeyCode
+		local isDriveKey = code == Enum.KeyCode.W
+			or code == Enum.KeyCode.Up
+			or code == Enum.KeyCode.S
+			or code == Enum.KeyCode.Down
+			or code == Enum.KeyCode.A
+			or code == Enum.KeyCode.Left
+			or code == Enum.KeyCode.D
+			or code == Enum.KeyCode.Right
+			or code == Enum.KeyCode.Space
+		-- Seated Drivers get WASD marked processed by PlayerModule.
+		if processed and not isDriveKey then
 			return
 		end
-		if input.KeyCode == Enum.KeyCode.W or input.KeyCode == Enum.KeyCode.Up then
+		if UserInputService:GetFocusedTextBox() then
+			return
+		end
+		if code == Enum.KeyCode.W or code == Enum.KeyCode.Up then
 			keyForward = true
-		elseif input.KeyCode == Enum.KeyCode.S or input.KeyCode == Enum.KeyCode.Down then
+		elseif code == Enum.KeyCode.S or code == Enum.KeyCode.Down then
 			keyReverse = true
-		elseif input.KeyCode == Enum.KeyCode.A or input.KeyCode == Enum.KeyCode.Left then
+		elseif code == Enum.KeyCode.A or code == Enum.KeyCode.Left then
 			keyLeft = true
-		elseif input.KeyCode == Enum.KeyCode.D or input.KeyCode == Enum.KeyCode.Right then
+		elseif code == Enum.KeyCode.D or code == Enum.KeyCode.Right then
 			keyRight = true
-		elseif input.KeyCode == Enum.KeyCode.Space then
+		elseif code == Enum.KeyCode.Space then
 			keyBrake = true
 		end
 	end)
@@ -574,6 +607,13 @@ local function bindInputs()
 			touchRight = false
 			touchBrake = false
 			stopActionHold()
+		end
+	end)
+
+	UserInputService.WindowFocusReleased:Connect(clearDriveInput)
+	DeviceInput.onPreferredInputChanged(function()
+		if latest then
+			refresh()
 		end
 	end)
 
@@ -654,6 +694,7 @@ end
 function MatchUI.mount()
 	gui = UIKit.screen("CargoCatastropheUI", player:WaitForChild("PlayerGui"))
 	gui.DisplayOrder = 20
+	root = UIKit.safeArea(gui)
 
 	crewSnapshotRemote = Net.get(Net.Names.CrewSnapshot)
 	requestSnapshotRemote = Net.get(Net.Names.RequestSnapshot)

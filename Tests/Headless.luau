@@ -64,12 +64,14 @@ local LabConfig = loadShared("LabConfig")
 local MatchConfig = loadShared("MatchConfig")
 local BuildProfiles = loadShared("BuildProfiles")
 local AudioIds = loadShared("AudioIds")
+local AudioMix = loadShared("AudioMix")
 local PresentationMath = loadShared("PresentationMath")
 local CrewRotation = loadShared("CrewRotation")
 local LabProgression = loadShared("LabProgression")
 local LabRespawnPolicy = loadShared("LabRespawnPolicy")
 local RunVariants = loadShared("RunVariants")
 local RouteMath = loadShared("RouteMath")
+local RunCauses = loadShared("RunCauses")
 local TokenBucket = loadShared("TokenBucket")
 local TuningSchema = loadShared("TuningSchema")
 
@@ -119,6 +121,80 @@ check("the core SFX manifest has 36 unique Roblox assets", function()
 		ids[id] = true
 	end
 	assert(count == 36, string.format("Expected 36 core SFX, got %d", count))
+end)
+
+check("every mixed key names a sound that exists", function()
+	for _, table_ in { AudioMix.EventVolume, AudioMix.LoopVolume, AudioMix.DuckWeight } do
+		for key in table_ do
+			assert(AudioIds.Sfx[key], "Mix references a sound that is not in AudioIds: " .. key)
+		end
+	end
+	for key in AudioMix.LoopVolume do
+		assert(string.find(key, "Loop$"), "Bed level applied to a one-shot: " .. key)
+	end
+end)
+
+--[[
+	The three-tier impact sets were previously played at a single volume, so the
+	severity the code had carefully computed was inaudible. Ordering is the
+	whole point of having tiers.
+]]
+check("impact severity is audible, not just computed", function()
+	for _, prefix in { "CargoImpact", "TruckCollision" } do
+		local light = AudioMix.eventVolume(prefix .. "Light")
+		local medium = AudioMix.eventVolume(prefix .. "Medium")
+		local heavy = AudioMix.eventVolume(prefix .. "Heavy")
+		assert(light < medium, prefix .. " medium is not louder than light")
+		assert(medium < heavy, prefix .. " heavy is not louder than medium")
+	end
+end)
+
+--[[
+	The invariant the whole split exists to hold: the loudest thing in the bed,
+	and the loudest the music ever gets, both stay under the quietest event that
+	is important enough to duck. Unducked is the hard case; ducking only widens
+	the gap.
+]]
+check("events clear the bed and the music before any ducking", function()
+	local quietestDuckingEvent = math.huge
+	for key, weight in AudioMix.DuckWeight do
+		if weight > 0 then
+			quietestDuckingEvent = math.min(quietestDuckingEvent, AudioMix.eventVolume(key))
+		end
+	end
+	assert(quietestDuckingEvent < math.huge, "No event ducks the mix")
+
+	local loudestLoop = 0
+	for _, volume in AudioMix.LoopVolume do
+		loudestLoop = math.max(loudestLoop, volume)
+	end
+	local loudestMusic = 0
+	for _, volume in AudioMix.MusicPhaseVolume do
+		loudestMusic = math.max(loudestMusic, volume)
+	end
+
+	local event = AudioMix.busVolume("SfxEvents", 0) * quietestDuckingEvent
+	assert(event > AudioMix.busVolume("SfxBed", 0) * loudestLoop, "The bed can bury an event that matters")
+	assert(event > AudioMix.busVolume("Music", 0) * loudestMusic, "The music can bury an event that matters")
+end)
+
+check("ducking only ever lowers a bus", function()
+	for name in AudioMix.Bus do
+		local open = AudioMix.busVolume(name, 0)
+		local ducked = AudioMix.busVolume(name, 1)
+		assert(ducked <= open, name .. " gets louder when ducked")
+		assert(ducked >= 0, name .. " ducks past silence")
+	end
+	assert(AudioMix.DuckDepth.Music > AudioMix.DuckDepth.SfxBed, "Music should give up more room than the bed")
+	assert(AudioMix.DuckDepth.SfxEvents == 0, "Events must not duck themselves")
+end)
+
+check("music steps back for the run it is scoring", function()
+	assert(
+		AudioMix.musicPhaseVolume("Run") < AudioMix.musicPhaseVolume("Staging"),
+		"Music is not quieter during the run than during staging"
+	)
+	assert(AudioMix.musicPhaseVolume("Nonsense") == AudioMix.MusicPhaseVolume.Staging, "Unknown phase lost its default")
 end)
 
 check("first-session feedback has enough time to answer", function()
@@ -181,17 +257,104 @@ check("contract and difficulty multipliers stack only when earned", function()
 	)
 end)
 
+--[[
+	The analytics breakdown used to be a substring search over a sentence, so
+	rewording a cause emptied a dashboard category with nothing failing. These
+	checks are what makes that a test failure instead.
+]]
+check("every declared wreck cause buckets to something specific", function()
+	local seen: { [string]: boolean } = {}
+	for _, cause in RunCauses.WreckOrder do
+		assert(RunCauses.isWreckCause(cause), cause .. " is not recognised as a wreck cause")
+		local bucket = RunCauses.bucket("TruckWrecked", cause)
+		assert(
+			bucket ~= RunCauses.UnknownWreckBucket,
+			cause .. " falls through to the catch-all bucket instead of its own"
+		)
+		assert(not seen[bucket], "Two wreck causes share the bucket " .. bucket)
+		seen[bucket] = true
+	end
+
+	for _, named in RunCauses.Wreck do
+		local found = false
+		for _, cause in RunCauses.WreckOrder do
+			found = found or cause == named
+		end
+		assert(found, "RunCauses.Wreck." .. named .. " is missing from WreckOrder")
+	end
+end)
+
+-- A wreck the player cannot learn from is a readability failure, and the
+-- playtest protocol treats those as no-go signals.
+check("every wreck cause tells the player what went wrong", function()
+	for _, cause in RunCauses.WreckOrder do
+		local text = RunCauses.WreckExplanation[cause]
+		assert(typeof(text) == "string" and text ~= "", cause .. " has no explanation for the result screen")
+		assert(RunCauses.explain(cause) == text, cause .. " does not resolve to its own explanation")
+	end
+	for cause in RunCauses.WreckExplanation do
+		assert(RunCauses.isWreckCause(cause), "Explanation written for a cause nothing can produce: " .. cause)
+	end
+end)
+
+-- The result screen is the only place a wreck is ever explained, so the
+-- fallback path has to say something rather than render an empty panel.
+check("an unrecognised wreck still explains itself", function()
+	local fallback = RunCauses.UnknownWreckExplanation
+	assert(typeof(fallback) == "string" and fallback ~= "", "The fallback explanation is empty")
+	assert(RunCauses.explain(nil) == fallback, "A missing cause produced no explanation")
+	assert(RunCauses.explain("reworded by someone") == fallback, "An unknown cause produced no explanation")
+	assert(RunCauses.explain("") == fallback, "An empty cause produced no explanation")
+	for _, cause in RunCauses.WreckOrder do
+		assert(RunCauses.explain(cause) ~= fallback, cause .. " fell through to the generic explanation")
+	end
+end)
+
+check("outcomes that are not wrecks never consult the cause", function()
+	-- A delivered run still carries whatever the load last did. Reading it here
+	-- is how the old substring version could mislabel a clean delivery.
+	for _, outcome in { "Delivered", "PartialLoss", "CargoLost", "TimeExpired" } do
+		local withCause = RunCauses.bucket(outcome, RunCauses.Wreck.Rolled)
+		local withoutCause = RunCauses.bucket(outcome, nil)
+		assert(withCause == withoutCause, outcome .. " changed bucket because of an unrelated cause")
+		assert(withCause ~= "Rollover", outcome .. " was bucketed as a wreck")
+	end
+	assert(RunCauses.bucket("Delivered", nil) == "Delivery", "Delivered lost its bucket")
+	assert(RunCauses.bucket("Abandoned", nil) == "Abandoned", "Unknown outcomes should pass through")
+end)
+
+check("a wreck with no usable cause is still countable", function()
+	assert(RunCauses.bucket("TruckWrecked", nil) == RunCauses.UnknownWreckBucket, "Missing cause lost its bucket")
+	assert(
+		RunCauses.bucket("TruckWrecked", "reworded by someone") == RunCauses.UnknownWreckBucket,
+		"An unrecognised cause must land in the catch-all, not vanish"
+	)
+	assert(not RunCauses.isWreckCause(nil), "nil is not a wreck cause")
+	assert(not RunCauses.isWreckCause("collision"), "Only declared causes count")
+end)
+
 check("respawns never attach to a wreck or result-phase truck", function()
 	assert(not LabRespawnPolicy.shouldAttach("Result", false, 0, -200), "Result truck accepted a respawn")
 	assert(not LabRespawnPolicy.shouldAttach("Run", true, 0, -200), "Wrecked truck accepted a respawn")
 	assert(not LabRespawnPolicy.shouldAttach("Run", false, -180, -200), "Descending void truck accepted a respawn")
 	assert(LabRespawnPolicy.shouldAttach("Staging", false, 0, -200), "Safe staging truck rejected a respawn")
+	assert(LabRespawnPolicy.shouldAttach("Run", false, 0, -200), "Safe mid-run truck rejected a respawn")
+	assert(LabRespawnPolicy.shouldAttach("Staging", false, -175, -200), "Staging truck above void buffer rejected")
 end)
 
 check("cargo offset thresholds are strictly increasing", function()
 	assert(LabConfig.ShiftedOffset < LabConfig.SlidingOffset, "Shifted must be under Sliding")
 	assert(LabConfig.SlidingOffset < LabConfig.HangingOffset, "Sliding must be under Hanging")
 	assert(LabConfig.HangingOffset < LabConfig.LostOffset, "Hanging must be under Lost")
+end)
+
+check("delivery and rollover thresholds are sane", function()
+	assert(LabConfig.DeliveryAcceptRadius > 0, "Delivery radius must be positive")
+	assert(LabConfig.DeliveryMaxSpeed > 0, "Delivery max speed must be positive")
+	assert(LabConfig.DeliveryCleanReadout > 0 and LabConfig.DeliveryCleanReadout <= 100, "Clean readout out of range")
+	assert(LabConfig.LostSeparationStuds > LabConfig.LostOffset, "World separation must exceed local lost offset")
+	assert(LabConfig.RolloverUpDot > 0 and LabConfig.RolloverUpDot < 1, "Rollover up-dot out of range")
+	assert(LabConfig.RolloverSeconds > 0, "Rollover duration must be positive")
 end)
 
 check("lean thresholds are increasing", function()

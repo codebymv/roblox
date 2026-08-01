@@ -1069,7 +1069,10 @@ end
 -- it can appear immediately when a second crew member joins, but make every
 -- visual and query surface disappear for solo play.
 function WorldBuilder.setSwapSignsVisible(route: LabRouteInfo, visible: boolean)
-	local swapSigns = route.swapSigns
+	local swapSigns = route and route.swapSigns
+	if not swapSigns or not swapSigns.Parent then
+		return
+	end
 	if swapSigns:GetAttribute("VisibleForCrew") == visible then
 		return
 	end

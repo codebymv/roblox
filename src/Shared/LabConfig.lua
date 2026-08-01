@@ -153,6 +153,9 @@ local LabConfig = {
 	-- Beyond this the load is off the deck and only the straps hold it.
 	HangingOffset = 3.4,
 	LostOffset = 9,
+	-- World-space gap from bed center before the crate counts as gone even if
+	-- a strap is somehow still attached (wreck / teleport desync).
+	LostSeparationStuds = 34,
 	DragForcePerStud = 320,
 
 	-- --------------------------------------------------------------- crew
@@ -232,6 +235,16 @@ local LabConfig = {
 	-- Bridge deck sits at Y = -136. Leave enough air under it that driving off
 	-- is a fall you watch, not an instant wreck.
 	VoidY = -200,
+	-- Rollover: UpVector.Y below this, sustained for RolloverSeconds.
+	RolloverUpDot = 0.15,
+	RolloverSeconds = 1.6,
+
+	-- ----------------------------------------------------------- delivery
+	-- Flat XZ distance / approach speed at the pad before outcome evaluation.
+	DeliveryAcceptRadius = 20,
+	DeliveryMaxSpeed = 14,
+	-- Cargo readout below this (with straps still on) is PartialLoss, not clean.
+	DeliveryCleanReadout = 62,
 }
 
 function LabConfig.surface(name: string?)

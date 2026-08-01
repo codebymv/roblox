@@ -43,6 +43,8 @@ local function cloneVisualPart(source: BasePart, name: string, parent: Instance)
 	clone.CanTouch = false
 	clone.CanQuery = false
 	clone.CastShadow = source.CastShadow
+	-- Server targets are fully transparent; the client copy must paint itself.
+	clone.Transparency = 0
 	clone.LocalTransparencyModifier = 0
 	clone.Parent = parent
 	return clone
@@ -203,7 +205,8 @@ function WheelPresentation.mount()
 			local localForward = Vector3.new(0, 0, -1)
 			local longitudinal = localForward - visual.localAxle * localForward:Dot(visual.localAxle)
 			longitudinal = if longitudinal.Magnitude > 0.001 then longitudinal.Unit else Vector3.new(0, 0, -1)
-			local localUp = visual.localAxle:Cross(longitudinal).Unit
+			local upCross = visual.localAxle:Cross(longitudinal)
+			local localUp = if upCross.Magnitude > 0.001 then upCross.Unit else Vector3.yAxis
 			visual.spin = (visual.spin + (forwardSpeed / math.max(visual.wheel.Size.Y * 0.5, 0.1)) * dt) % FULL_TURN
 
 			local localFrame = CFrame.fromMatrix(visual.localPosition, visual.localAxle, localUp, -longitudinal)

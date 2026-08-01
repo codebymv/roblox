@@ -14,6 +14,12 @@ end
 -- starts assigning players so rewards and cosmetics never race the first run.
 PlayerDataService.init()
 
+--[[
+	Mode split is intentional dual-stack risk: FunTest (LabSession) and Depot
+	(CrewMatch) both live under Shared/Net. Changing remotes, RoleKits, or
+	WorldBuilder can break the dormant mode even when smoke only runs the active
+	one. Prefer additive Shared helpers over editing the unused path casually.
+]]
 if DevConfig.isFunTest() then
 	--[[
 		Physics-first public build. It reuses profiles and cosmetics, while the
