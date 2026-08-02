@@ -218,7 +218,7 @@ function LabSession:_ensureRigIntact(): boolean
 		end
 		self.director:reset()
 		self:_assignRoles()
-		self:_applyDriverPaint()
+		self:_applyDriverCosmetics()
 	end, debug.traceback)
 	if not ok then
 		warn("[CargoLab] Rig rebuild at GO failed.\n" .. tostring(err))
@@ -595,9 +595,10 @@ function LabSession:_isSolo(): boolean
 	return self:_activeCrewCount() <= 1
 end
 
-function LabSession:_applyDriverPaint()
+function LabSession:_applyDriverCosmetics()
 	if self.chassisRig then
-		self.chassisRig:setPaintColor(LabProgressionService.paintColorFor(self:currentDriver()))
+		local livery, finish, paintColor = LabProgressionService.cosmeticsFor(self:currentDriver())
+		self.chassisRig:setCosmetics(livery, finish, paintColor)
 	end
 end
 
@@ -988,7 +989,7 @@ function LabSession:enterStaging()
 		self.director:reset()
 		self.telemetry:reset()
 		self:_assignRoles()
-		self:_applyDriverPaint()
+		self:_applyDriverCosmetics()
 	end, debug.traceback)
 	if not ok then
 		self.stepFailed = true
@@ -1793,7 +1794,7 @@ function LabSession:_bindRemotes()
 		if self.roles[player.UserId] then
 			self.analytics:roleAssigned(player, self.roles[player.UserId])
 		end
-		self:_applyDriverPaint()
+		self:_applyDriverCosmetics()
 		self:_broadcastSnapshot()
 	end))
 
@@ -1859,7 +1860,7 @@ function LabSession:_bindRemotes()
 		LabRemotes.fireClient(Net.Names.LabEvent, player, message)
 		if ok then
 			if self:currentDriver() == player then
-				self:_applyDriverPaint()
+				self:_applyDriverCosmetics()
 			end
 			self:_broadcastSnapshot()
 		end
@@ -1937,7 +1938,7 @@ function LabSession:_onPlayerAdded(player: Player)
 		if profile and self.started and player.Parent then
 			player:SetAttribute("CargoCredits", profile.credits)
 			if self.phase == "Staging" and self:currentDriver() == player then
-				self:_applyDriverPaint()
+				self:_applyDriverCosmetics()
 			end
 			self:_broadcastSnapshot()
 		end

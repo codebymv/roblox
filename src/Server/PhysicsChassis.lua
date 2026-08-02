@@ -21,7 +21,9 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Cosmetics = require(Shared:WaitForChild("Cosmetics"))
 local LabConfig = require(Shared:WaitForChild("LabConfig"))
+local LiveryShapes = require(Shared:WaitForChild("LiveryShapes"))
 local RunCauses = require(Shared:WaitForChild("RunCauses"))
 
 local WorldBuilder = require(script.Parent.WorldBuilder)
@@ -48,6 +50,13 @@ local function weldTo(primary: BasePart, part: BasePart)
 	weld.Part0 = primary
 	weld.Part1 = part
 	weld.Parent = primary
+end
+
+local function materialByName(name: string): Enum.Material
+	local ok, material = pcall(function()
+		return Enum.Material[name]
+	end)
+	return if ok and material then material else Enum.Material.SmoothPlastic
 end
 
 --[[
@@ -114,6 +123,7 @@ function PhysicsChassis.new(route: WorldBuilder.LabRouteInfo)
 		steerAngle = 0,
 		wheels = {},
 		bodyPaintParts = {},
+		liveryParts = {},
 		suspensionHealth = { FL = 1, FR = 1, RL = 1, RR = 1 },
 		steeringHealth = 1,
 		integrity = LabConfig.MaxChassisIntegrity,
@@ -430,6 +440,11 @@ function PhysicsChassis:_build()
 
 	self.rayParams = rayParams
 
+	self:setCosmetics(
+		Cosmetics.livery(Cosmetics.DefaultLivery),
+		Cosmetics.finish(Cosmetics.DefaultFinish),
+		Color3.fromRGB(170, 66, 48)
+	)
 	self:claimOwnership()
 end
 
@@ -1102,12 +1117,107 @@ function PhysicsChassis:setFrozen(frozen: boolean)
 	end
 end
 
-function PhysicsChassis:setPaintColor(color: Color3)
+local function configureCosmeticPart(
+	part: BasePart,
+	color: Color3,
+	paintColor: Color3,
+	shade: number,
+	finish,
+	material: Enum.Material
+)
+	part.Color = color
+	part.Material = material
+	part.MaterialVariant = ""
+	part.Reflectance = math.clamp(finish.reflectance, 0, 1)
+	part:SetAttribute("CosmeticPaintPart", true)
+	part:SetAttribute("CosmeticBaseColor", paintColor)
+	part:SetAttribute("CosmeticShade", shade)
+	part:SetAttribute("CosmeticCycles", finish.cycles)
+end
+
+--[[
+	Render the two-axis collection onto the physical truck.
+
+	The server creates the geometry so every player sees the same livery and a
+	late join receives it automatically. Every decorative part is massless and
+	non-interactive, so a flame lick cannot change suspension, catch the road or
+	enter a strap ray. Holographic colour motion is deliberately left to the
+	client; replicating a colour every frame would turn a cosmetic into network
+	traffic on the same truck whose motion already needs every byte it can keep.
+]]
+function PhysicsChassis:setCosmetics(livery, finish, paintColor: Color3)
+	if not self.model or not self.model.Parent or not self.cab or not self.cab.Parent then
+		return
+	end
+
+	livery = livery or Cosmetics.livery(Cosmetics.DefaultLivery)
+	finish = finish or Cosmetics.finish(Cosmetics.DefaultFinish)
+	if not livery or not finish then
+		return
+	end
+
+	local oldFolder = self.model:FindFirstChild("CosmeticLivery")
+	if oldFolder then
+		oldFolder:Destroy()
+	end
+	table.clear(self.liveryParts)
+
+	local material = materialByName(finish.material)
+	local treated = Cosmetics.treatedColor(paintColor, finish)
 	for _, part in self.bodyPaintParts do
 		if part and part.Parent then
-			part.Color = color
+			configureCosmeticPart(part, treated, paintColor, 1, finish, material)
 		end
 	end
+
+	local folder = Instance.new("Folder")
+	folder.Name = "CosmeticLivery"
+	folder.Parent = self.model
+
+	for index, shape in LiveryShapes.forLivery(livery.id) do
+		for _, side in { -1, 1 } do
+			local part = Instance.new("Part")
+			part.Name = string.format("%s_%s_%02d", livery.id, if side < 0 then "L" else "R", index)
+			part.Size = shape.size
+			part.CFrame = self.cab.CFrame
+				* CFrame.new(side * shape.offset.X, shape.offset.Y, shape.offset.Z)
+				* CFrame.Angles(math.rad(shape.rollDeg), 0, 0)
+			part.Anchored = false
+			part.CanCollide = false
+			part.CanTouch = false
+			part.CanQuery = false
+			part.CastShadow = false
+			part.Massless = true
+			configureCosmeticPart(
+				part,
+				Cosmetics.shadeColor(treated, shape.shade),
+				paintColor,
+				shape.shade,
+				finish,
+				material
+			)
+			part.Parent = folder
+
+			local weld = Instance.new("WeldConstraint")
+			weld.Name = "CosmeticWeld"
+			weld.Part0 = self.cab
+			weld.Part1 = part
+			weld.Parent = part
+			table.insert(self.liveryParts, part)
+		end
+	end
+
+	self.cosmeticLivery = livery
+	self.cosmeticFinish = finish
+	self.cosmeticPaintColor = paintColor
+	self.model:SetAttribute("CosmeticLivery", livery.id)
+	self.model:SetAttribute("CosmeticFinish", finish.id)
+	self.model:SetAttribute("CosmeticCycles", finish.cycles)
+	self.model:SetAttribute("CosmeticRevision", (self.model:GetAttribute("CosmeticRevision") or 0) + 1)
+end
+
+function PhysicsChassis:setPaintColor(color: Color3)
+	self:setCosmetics(self.cosmeticLivery, self.cosmeticFinish, color)
 end
 
 --[[

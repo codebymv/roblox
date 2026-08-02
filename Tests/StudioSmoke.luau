@@ -23,22 +23,30 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 
 local shared = ReplicatedStorage:WaitForChild("Shared")
 local server = ServerScriptService:WaitForChild("Server")
 
 local DevConfig = require(shared:WaitForChild("DevConfig"))
+local Cosmetics = require(shared:WaitForChild("Cosmetics"))
 local LabConfig = require(shared:WaitForChild("LabConfig"))
 local LabRemotes = require(shared:WaitForChild("LabRemotes"))
 local Net = require(shared:WaitForChild("Net"))
+local LiveryShapes = require(shared:WaitForChild("LiveryShapes"))
 local TruckPaints = require(shared:WaitForChild("TruckPaints"))
 local RunVariants = require(shared:WaitForChild("RunVariants"))
 local RouteFeatures = require(shared:WaitForChild("RouteFeatures"))
 local RouteMath = require(shared:WaitForChild("RouteMath"))
 local TuningSchema = require(shared:WaitForChild("TuningSchema"))
 
-local RateLimiter = require(server:WaitForChild("RateLimiter"))
+local RateLimiter
+
+local function loadServerModules()
+	assert(RunService:IsRunning(), "StudioSmoke must run after pressing Play; the current context is Edit mode")
+	RateLimiter = require(server:WaitForChild("RateLimiter"))
+end
 
 local StudioSmoke = {}
 
@@ -47,7 +55,11 @@ local StudioSmoke = {}
 --------------------------------------------------------------------------------
 
 local function checkShared()
-	assert(Players.MaxPlayers == LabConfig.MaxCrew, "Place capacity must match the server-enforced crew capacity")
+	-- Studio solo servers report their own local simulation ceiling (currently
+	-- 60), not the Maximum Visitor Count saved for the cloud place. The real
+	-- place limit therefore cannot be asserted from this suite. LabConfig's
+	-- four-person invariant is covered headlessly; the Creator Dashboard value
+	-- is a manual release check documented in Tests/README.md.
 	if DevConfig.isRelease() then
 		assert(#DevConfig.releaseSafetyIssues() == 0, "Published profile exposed developer tooling")
 	end
@@ -132,9 +144,12 @@ local function checkFunTest()
 	-- this section inspects what is already there.
 	local lab = Workspace:WaitForChild("CargoLab", 10)
 	assert(lab, "Lab world was not built")
-	local TruckLab = require(server:WaitForChild("TruckLab"))
-	local session = TruckLab.getSession()
-	assert(session and session.runVariant, "Live session has no run variation card")
+	local truckLabModule = server:WaitForChild("TruckLab")
+	local sessionBridge = truckLabModule:WaitForChild("GetLiveSessionForStudioSmoke", 5)
+	assert(sessionBridge and sessionBridge:IsA("BindableFunction"), "Live session test bridge is missing")
+	local session = sessionBridge:Invoke("State")
+	assert(session, "Live session test bridge returned no session")
+	assert(session.runVariant, "Live session has no run variation card")
 	local activeRouteId = lab:GetAttribute("ActiveRouteId")
 	assert(typeof(activeRouteId) == "string", "Lab world has no active route id")
 	local activeRoute = lab:FindFirstChild("Route_" .. activeRouteId)
@@ -144,14 +159,14 @@ local function checkFunTest()
 	for index, route in session.routes do
 		assert(route.root.Parent == lab, "Route " .. route.id .. " is outside the shared world root")
 		assert(
-			route.root:GetAttribute("Active") == (route == session.route),
+			route.root:GetAttribute("Active") == (route.id == session.route.id),
 			"Route active flag disagrees with session"
 		)
 		local spawn = route.root:FindFirstChild("LabSpawn")
 		assert(spawn and spawn:IsA("SpawnLocation"), "Route " .. route.id .. " has no spawn")
 		if spawn.Enabled then
 			enabledSpawns += 1
-			assert(index == session:currentLeg(), "The enabled spawn belongs to an inactive leg")
+			assert(index == session.currentLeg, "The enabled spawn belongs to an inactive leg")
 		end
 		local start = route.points[1]
 		assert(
@@ -201,7 +216,7 @@ local function checkFunTest()
 	end
 	local player = Players:GetPlayers()[1]
 	if player and session.phase == "Staging" then
-		local snapshot = session:buildSnapshotFor(player)
+		local snapshot = sessionBridge:Invoke("BuildSnapshot", player)
 		if snapshot.restartSeconds > 0 then
 			assert(
 				string.find(snapshot.objective, tostring(snapshot.restartSeconds), 1, true),
@@ -247,7 +262,44 @@ local function checkFunTest()
 		assert(chassis:FindFirstChild("Force_" .. id), "Missing wheel force attachment " .. id)
 		assert(chassis:FindFirstChild("WheelForce_" .. id), "Missing wheel force actuator " .. id)
 	end
-	assert(session.chassisRig:hasCompleteWheelSet(), "Truck is missing wheel geometry or force authority")
+	assert(sessionBridge:Invoke("HasCompleteWheelSet"), "Truck is missing wheel geometry or force authority")
+
+	-- Every authored livery/finish combination must survive real Instance
+	-- construction. The headless suite validates the tables; only Studio can
+	-- prove the resulting Parts are visual-only and weld cleanly to the cab.
+	for _, livery in Cosmetics.Liveries do
+		for _, finish in Cosmetics.Finishes do
+			sessionBridge:Invoke("SetCosmetics", livery, finish)
+			assert(truck:GetAttribute("CosmeticLivery") == livery.id, "Truck rejected livery " .. livery.id)
+			assert(truck:GetAttribute("CosmeticFinish") == finish.id, "Truck rejected finish " .. finish.id)
+			assert(truck:GetAttribute("CosmeticCycles") == finish.cycles, finish.id .. " cycle flag was lost")
+			local folder = truck:FindFirstChild("CosmeticLivery")
+			assert(folder and folder:IsA("Folder"), "Cosmetic livery folder is missing")
+			local parts = 0
+			for _, descendant in folder:GetDescendants() do
+				if descendant:IsA("BasePart") then
+					parts += 1
+					assert(descendant.Massless, descendant.Name .. " added mass to the truck")
+					assert(not descendant.CanCollide, descendant.Name .. " can collide")
+					assert(not descendant.CanTouch, descendant.Name .. " can fire touch events")
+					assert(not descendant.CanQuery, descendant.Name .. " can intercept gameplay queries")
+					assert(not descendant.CastShadow, descendant.Name .. " casts a detached panel shadow")
+					assert(descendant:FindFirstChild("CosmeticWeld"), descendant.Name .. " is not welded to the cab")
+				end
+			end
+			assert(parts == #LiveryShapes.forLivery(livery.id) * 2, livery.id .. " rendered the wrong part count")
+			local cab = truck:FindFirstChild("Cab")
+			assert(cab and cab:IsA("BasePart"), "Cab disappeared during cosmetic rendering")
+			assert(cab:GetAttribute("CosmeticCycles") == finish.cycles, finish.id .. " did not mark paint parts")
+			if finish.id == "Gold" then
+				assert(
+					cab.Color == finish.tint and cab.Material == Enum.Material.Metal,
+					"Solid Gold did not render as gold metal"
+				)
+			end
+		end
+	end
+	sessionBridge:Invoke("RestoreDriverCosmetics")
 
 	local crate = truck:FindFirstChild("Crate")
 	assert(crate and crate:IsA("BasePart"), "Crate missing")
@@ -370,7 +422,7 @@ local function checkFunTest()
 	assert(ride > 1, "Truck sank into the ground; suspension is under-sprung (ride " .. tostring(ride) .. ")")
 
 	-- The crate should still be on the bed and roughly where it started.
-	local localOffset = chassis.CFrame:PointToObjectSpace(crate.Position) - session.cargoLoad.home
+	local localOffset = chassis.CFrame:PointToObjectSpace(crate.Position) - session.cargoHome
 	assert(
 		Vector3.new(localOffset.X, 0, localOffset.Z).Magnitude < LabConfig.SlidingOffset,
 		"Crate drifted off the bed while parked"
@@ -389,6 +441,7 @@ local function checkFunTest()
 end
 
 function StudioSmoke.run()
+	loadServerModules()
 	checkShared()
 	checkFunTest()
 	print("STUDIO_SMOKE_OK (" .. DevConfig.Profile .. ")")

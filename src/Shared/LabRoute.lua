@@ -87,7 +87,7 @@ local PLAN: { RouteSections.Step } = {
 	{ kind = Point, at = Vector3.new(1700, -136, 1458), width = 18, shoulders = false },
 	{ kind = Point, at = Vector3.new(1700, -136, 1472), width = 24 },
 	{ kind = Point, at = Vector3.new(1700, -136, 1490), width = 30 },
-	{ kind = EasedTurn, at = Vector3.new(1622, -102, 1700), width = 30, steps = 10 },
+	{ kind = EasedTurn, at = Vector3.new(1622, -102, 1700), width = 30, steps = 18 },
 
 	-- 9. S-bends. Two direction changes in a row is the cheapest way to make an
 	--    already-shifted load into a second crisis.
@@ -185,11 +185,25 @@ local PASS_PLAN: { RouteSections.Step } = {
 	-- 6. Descending traverse, on ice. The hardest stretch on either route: the
 	--    grade adds the speed and the surface refuses to take it back.
 	{ kind = Point, at = Vector3.new(6260, -2, 1620), width = 24, surface = "Ice" },
-	{ kind = Point, at = Vector3.new(6300, -26, 1760), width = 22, surface = "Ice" },
-	{ kind = Point, at = Vector3.new(6380, -52, 1900), width = 22, surface = "Ice" },
+	{
+		kind = Curve,
+		control = Vector3.new(6260, -14, 1720),
+		at = Vector3.new(6380, -45, 1840),
+		width = 22,
+		surface = "Ice",
+		steps = 10,
+	},
+	{
+		kind = Curve,
+		control = Vector3.new(6440, -55, 1900),
+		at = Vector3.new(6440, -62, 1960),
+		width = 18,
+		surface = "Ice",
+		shoulders = false,
+		steps = 10,
+	},
 
 	-- 7. Second bridge, entered with whatever the traverse gave you.
-	{ kind = Point, at = Vector3.new(6420, -62, 1960), width = 18, shoulders = false },
 	{ kind = Point, at = Vector3.new(6440, -66, 1990), width = 13, surface = "Bridge", shoulders = false },
 	{ kind = Point, at = Vector3.new(6440, -66, 2200), width = 13, surface = "Bridge", shoulders = false },
 	{ kind = Point, at = Vector3.new(6440, -64, 2230), width = 20, shoulders = false },
@@ -202,7 +216,7 @@ local PASS_PLAN: { RouteSections.Step } = {
 		width = 22,
 		surface = "Snow",
 		bankDeg = 5,
-		steps = 12,
+		steps = 16,
 	},
 	{
 		kind = Curve,
@@ -211,14 +225,26 @@ local PASS_PLAN: { RouteSections.Step } = {
 		width = 22,
 		surface = "Snow",
 		bankDeg = -5,
-		steps = 12,
+		steps = 16,
 	},
 
 	-- 9. Climb out.
-	{ kind = Point, at = Vector3.new(6380, -36, 2680), width = 24 },
+	{
+		kind = Curve,
+		control = Vector3.new(6380, -48, 2580),
+		at = Vector3.new(6380, -36, 2680),
+		width = 24,
+		steps = 16,
+	},
 
 	-- 10. Rough shelf, taken with whatever is left.
-	{ kind = Point, at = Vector3.new(6400, -30, 2800), width = 26, surface = "Rough" },
+	{
+		kind = EasedTurn,
+		at = Vector3.new(6400, -30, 2800),
+		width = 26,
+		surface = "Rough",
+		steps = 10,
+	},
 	{ kind = Point, at = Vector3.new(6400, -28, 2900), width = 26, surface = "Rough" },
 
 	-- 11. Short run-in. Still asking questions at the gate.

@@ -12,6 +12,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 
+local Cosmetics = require(Shared:WaitForChild("Cosmetics"))
 local LabProgression = require(Shared:WaitForChild("LabProgression"))
 local TruckPaints = require(Shared:WaitForChild("TruckPaints"))
 local Types = require(Shared:WaitForChild("Types"))
@@ -207,6 +208,24 @@ function LabProgressionService.paintColorFor(player: Player?): Color3
 	local paint = TruckPaints.getPaint(paintId) or TruckPaints.getPaint("Factory")
 	assert(paint, "Factory paint is missing")
 	return paint.color
+end
+
+-- The current Driver owns the shared truck's appearance. Resolution happens
+-- server-side so a stale or edited profile can only fall back to defaults; it
+-- can never equip an unearned livery or a finish the player does not own.
+function LabProgressionService.cosmeticsFor(player: Player?)
+	local profile = if player then PlayerDataService.get(player) else nil
+	local paintId = if profile then profile.equippedPaint else "Factory"
+	local paint = TruckPaints.getPaint(paintId) or TruckPaints.getPaint("Factory")
+	assert(paint, "Factory paint is missing")
+
+	local livery, finish = Cosmetics.resolve(
+		if profile then profile.equippedLivery else Cosmetics.DefaultLivery,
+		if profile then profile.equippedFinish else Cosmetics.DefaultFinish,
+		if profile then profile.dailyWins else 0,
+		if profile then profile.unlockedFinishes else {}
+	)
+	return livery, finish, paint.color
 end
 
 return LabProgressionService

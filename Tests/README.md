@@ -49,6 +49,12 @@ the one world Bootstrap builds.
 
 It waits two seconds for the physics solver to settle, so it is not instant.
 
+Studio's solo server reports its local simulation ceiling through
+`Players.MaxPlayers` instead of the cloud place's **Maximum Visitor Count**.
+The smoke suite therefore cannot verify that setting. Before a release, check
+the start place in Creator Dashboard and keep Maximum Visitor Count at **4** so
+it matches `LabConfig.MaxCrew`.
+
 ## Which suite does a new test belong in?
 
 Ask whether the assertion needs a DataModel, the solver, or replication. If not,

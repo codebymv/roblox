@@ -14,6 +14,7 @@
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Net = require(Shared:WaitForChild("Net"))
@@ -28,6 +29,59 @@ local WorldBuilder = require(script.Parent.WorldBuilder)
 local TruckLab = {}
 
 local session = nil
+local studioSessionBridge = nil
+
+local function exposeStudioSession()
+	if not RunService:IsStudio() then
+		return
+	end
+
+	if studioSessionBridge then
+		studioSessionBridge:Destroy()
+	end
+	studioSessionBridge = Instance.new("BindableFunction")
+	studioSessionBridge.Name = "GetLiveSessionForStudioSmoke"
+	studioSessionBridge.OnInvoke = function(action, argumentA, argumentB)
+		assert(session, "CargoLab session is not running")
+		if action == "State" then
+			local routes = {}
+			for index, route in session.routes do
+				routes[index] = {
+					id = route.id,
+					root = route.root,
+					startCFrame = route.startCFrame,
+					points = route.points,
+					features = route.features,
+				}
+			end
+			return {
+				phase = session.phase,
+				currentLeg = session:currentLeg(),
+				routes = routes,
+				route = {
+					id = session.route.id,
+					root = session.route.root,
+					features = session.route.features,
+				},
+				runVariant = session.runVariant,
+				cargoHome = session.cargoLoad and session.cargoLoad.home or Vector3.zero,
+			}
+		elseif action == "BuildSnapshot" then
+			return session:buildSnapshotFor(argumentA)
+		elseif action == "HasCompleteWheelSet" then
+			return session.chassisRig and session.chassisRig:hasCompleteWheelSet() or false
+		elseif action == "SetCosmetics" then
+			assert(session.chassisRig, "CargoLab chassis is not running")
+			session.chassisRig:setCosmetics(argumentA, argumentB, session.chassisRig.cosmeticPaintColor)
+			return true
+		elseif action == "RestoreDriverCosmetics" then
+			session:_applyDriverCosmetics()
+			return true
+		end
+		error("Unknown Studio smoke action: " .. tostring(action))
+	end
+	studioSessionBridge.Parent = script
+end
 
 function TruckLab.init()
 	Net.ensureServer()
@@ -36,6 +90,7 @@ function TruckLab.init()
 	local routes = WorldBuilder.buildLabWorld()
 	session = LabSession.new({ routes = routes })
 	session:start()
+	exposeStudioSession()
 
 	DevCommands.init({
 		warp = function(progress: number): string
@@ -65,6 +120,10 @@ function TruckLab.getSession()
 end
 
 function TruckLab.shutdown()
+	if studioSessionBridge then
+		studioSessionBridge:Destroy()
+		studioSessionBridge = nil
+	end
 	if session then
 		session:destroy()
 		session = nil

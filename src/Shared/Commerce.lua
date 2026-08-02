@@ -68,15 +68,15 @@ export type Product = {
 local CATALOG: { Product } = {
 	{
 		key = "CargoCashSmall",
-		assetId = 0,
+		assetId = 3612861884,
 		kind = "Product",
-		label = "Cargo Cash",
+		label = "1,200 Cargo Cash",
 		description = "A stack of Cargo Cash toward cab paint.",
 		grant = { kind = "Credits", amount = 1200 },
 	},
 	{
 		key = "HolographicFinish",
-		assetId = 0,
+		assetId = 1934331260,
 		kind = "Pass",
 		label = "Holographic Finish",
 		description = "A finish that never settles on a colour. Works with every livery you own.",
@@ -84,7 +84,7 @@ local CATALOG: { Product } = {
 	},
 	{
 		key = "SupporterPack",
-		assetId = 0,
+		assetId = 1932105841,
 		kind = "Pass",
 		label = "Supporter Pack",
 		description = "Prototype White cab paint, and thanks.",

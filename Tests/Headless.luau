@@ -53,6 +53,7 @@ local ENVIRONMENT = {
 -- handle on the constructors it uses to build test fixtures.
 local Vector3 = roblox.Vector3
 local Color3 = roblox.Color3
+local CFrame = roblox.CFrame
 
 --[[
 	Shared modules may require their siblings.
@@ -624,7 +625,7 @@ check("condition and payout records only move upward", function()
 	assert(records.bestConditionPct == 100, "Condition was not clamped to 100")
 end)
 
-check("badges are earned by what happened, and fail closed until configured", function()
+check("badges are earned by what happened", function()
 	local earned = Achievements.earnedBy("Delivered", 100, 2, true)
 	assert(table.find(earned, "FirstDelivery"), "A delivery earned no first-delivery badge")
 	assert(table.find(earned, "SpotlessDelivery"), "A perfect delivery earned no badge")
@@ -643,7 +644,25 @@ check("badges are earned by what happened, and fail closed until configured", fu
 	for _, badge in Achievements.Badges do
 		assert(badge.label ~= "" and badge.description ~= "", badge.key .. " is missing its copy")
 	end
-	assert(#Achievements.awardable() == 0, "A badge is configured; update this check when ids are real")
+end)
+
+check("every badge is configured with its unique Roblox id", function()
+	local expected = {
+		FirstDelivery = 132860980817594,
+		SpotlessDelivery = 831709615579183,
+		SavedIt = 2074811750681195,
+		TookTheRisk = 2994664553098399,
+	}
+	local seenIds = {}
+	for key, assetId in expected do
+		local badge = Achievements.badge(key)
+		assert(badge ~= nil, key .. " is missing from the badge catalogue")
+		assert(badge.assetId == assetId, key .. " has the wrong Roblox badge id")
+		assert(Achievements.isConfigured(badge), key .. " is still treated as unconfigured")
+		assert(not seenIds[assetId], key .. " shares a Roblox id with another badge")
+		seenIds[assetId] = true
+	end
+	assert(#Achievements.awardable() == 4, "Not all four badges can be awarded")
 end)
 
 check("every record the result screen can announce has words", function()
@@ -735,6 +754,44 @@ check("only the bridge goes without shoulders", function()
 				entry.surface == "Bridge" or entry.width <= 24,
 				"A wide road section lost its shoulders: " .. entry.surface
 			)
+		end
+	end
+end)
+
+check("every road collision joint changes heading and normal gradually", function()
+	for _, routeDefinition in LabRoute.Routes do
+		local nodes = LabRoute.nodes(routeDefinition.id)
+		local previousFrame = nil
+		for index = 2, #nodes do
+			local from = nodes[index - 1]
+			local to = nodes[index]
+			local midpoint = (from.position + to.position) / 2
+			local bank = math.rad((from.bankDeg + to.bankDeg) / 2)
+			local frame = CFrame.lookAt(midpoint, to.position) * CFrame.Angles(0, 0, bank)
+			if previousFrame then
+				local directionDelta =
+					math.deg(math.acos(math.clamp(previousFrame.LookVector:Dot(frame.LookVector), -1, 1)))
+				local normalDelta = math.deg(math.acos(math.clamp(previousFrame.UpVector:Dot(frame.UpVector), -1, 1)))
+				assert(
+					directionDelta <= 9,
+					string.format(
+						"%s joint %d changes heading/grade by %.2f degrees",
+						routeDefinition.id,
+						index - 1,
+						directionDelta
+					)
+				)
+				assert(
+					normalDelta <= 9,
+					string.format(
+						"%s joint %d changes its normal by %.2f degrees",
+						routeDefinition.id,
+						index - 1,
+						normalDelta
+					)
+				)
+			end
+			previousFrame = frame
 		end
 	end
 end)
@@ -1171,13 +1228,34 @@ check("the premium finish never overrides the player's paint", function()
 	for _, finish in Cosmetics.Finishes do
 		if finish.overridesPaint then
 			overriding += 1
-			assert(
-				finish.tint == Color3.fromRGB(255, 255, 255),
-				finish.id .. " overrides the paint and also tints it, which applies its colour twice"
-			)
+			assert(finish.id == "Gold", finish.id .. " overrides paint without being the declared Solid Gold exception")
 		end
 	end
 	assert(overriding <= 1, "More than one finish ignores the player's paint")
+end)
+
+check("finish colour treatment is deterministic and upload-independent", function()
+	local paint = Color3.fromRGB(170, 66, 48)
+	local matte = Cosmetics.finish("Matte")
+	local gold = Cosmetics.finish("Gold")
+	assert(matte and gold, "Core finishes are missing")
+	assert(Cosmetics.treatedColor(paint, matte) == paint, "Matte changed the equipped paint")
+	assert(Cosmetics.treatedColor(paint, gold) == Color3.fromRGB(212, 175, 55), "Solid Gold is not gold")
+	assert(gold.textureId == 0, "Solid Gold unexpectedly depends on an uploaded asset")
+	local highlight = Cosmetics.shadeColor(gold.tint, 1.5)
+	assert(highlight.R <= 1 and highlight.G <= 1 and highlight.B <= 1, "Livery shading exceeded Color3 bounds")
+end)
+
+check("holographic colour cycles while remaining bounded", function()
+	local paint = Color3.fromRGB(40, 62, 110)
+	local early = Cosmetics.holographicColor(paint, 1, 0)
+	local later = Cosmetics.holographicColor(paint, 1, 0.25)
+	assert(early ~= later, "Holographic phase did not change the colour")
+	for _, color in { early, later, Cosmetics.holographicColor(paint, 8, 0.5) } do
+		assert(color.R >= 0 and color.R <= 1, "Holographic red channel escaped bounds")
+		assert(color.G >= 0 and color.G <= 1, "Holographic green channel escaped bounds")
+		assert(color.B >= 0 and color.B <= 1, "Holographic blue channel escaped bounds")
+	end
 end)
 
 check("every livery has shapes, and every shape sits on the cab", function()
@@ -1383,10 +1461,10 @@ check("nothing on sale grants an advantage", function()
 end)
 
 --[[
-	Shipping the pipeline ahead of the catalogue only works if an unconfigured
-	product is inert. A placeholder id of zero must never be offered, matched or
-	prompted, and with every id currently zero, id lookup must not collapse them
-	all onto whichever entry happens to be first.
+	Shipping part of the catalogue ahead of the rest only works if every
+	unconfigured product stays inert. A placeholder id of zero must never be
+	offered, matched or prompted, and must not collapse onto whichever entry
+	happens to be first.
 ]]
 check("an unconfigured product is completely inert", function()
 	for _, product in Commerce.Catalog do
@@ -1401,6 +1479,25 @@ check("an unconfigured product is completely inert", function()
 	for _, product in Commerce.purchasable() do
 		assert(Commerce.isConfigured(product), "purchasable() offered an unconfigured product")
 	end
+end)
+
+check("every live product resolves by its Roblox id and only its own kind", function()
+	local live = {
+		CargoCashSmall = { assetId = 3612861884, kind = "Product" },
+		HolographicFinish = { assetId = 1934331260, kind = "Pass" },
+		SupporterPack = { assetId = 1932105841, kind = "Pass" },
+	}
+	for key, expected in live do
+		local product = Commerce.byKey(key)
+		assert(product ~= nil, key .. " is missing from the catalogue")
+		assert(product.assetId == expected.assetId, key .. " has the wrong Roblox asset id")
+		assert(product.kind == expected.kind, key .. " has the wrong commerce kind")
+		assert(Commerce.isConfigured(product), key .. " is still treated as unconfigured")
+		assert(Commerce.byAssetId(expected.assetId, expected.kind) == product, key .. " will not resolve")
+		local wrongKind = if expected.kind == "Pass" then "Product" else "Pass"
+		assert(Commerce.byAssetId(expected.assetId, wrongKind) == nil, key .. " also resolved as " .. wrongKind)
+	end
+	assert(#Commerce.purchasable() == 3, "The storefront does not expose all three live products")
 end)
 
 check("the catalogue is internally consistent", function()

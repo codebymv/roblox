@@ -144,74 +144,81 @@ function UIKit.horizontalRow(parent: Instance, name: string, height: number): Fr
 	return row
 end
 
-function UIKit.screen(name: string, parent: Instance): ScreenGui
+--[[
+	displayOrder defaults to 10 (run HUD). Debug overlays pass a higher value.
+	TextChat / PlayerList live in CoreGui and still draw above any PlayerGui
+	order — disable those CoreGui types at the call site if they must not cover
+	panels; DisplayOrder alone cannot win that fight.
+
+	No UIScale here. Insets and responsive scale live on separate layers inside
+	safeArea — coupling them on one node shifts every Position 0.5 panel.
+]]
+function UIKit.screen(name: string, parent: Instance, displayOrder: number?): ScreenGui
 	local gui = Instance.new("ScreenGui")
 	gui.Name = name
 	gui.ResetOnSpawn = false
 	-- Full-bleed so the truck camera is not letterboxed; SafeArea below
 	-- respects the topbar / home-indicator insets so panels do not collide.
 	gui.IgnoreGuiInset = true
+	gui.DisplayOrder = displayOrder or 10
 	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	pcall(function()
+		(gui :: any).ClipToDeviceSafeArea = true
+	end)
 	gui.Parent = parent
-
-	local scale = Instance.new("UIScale")
-	scale.Name = "ResponsiveScale"
-	scale.Parent = gui
-	UIKit.bindResponsiveScale(gui)
-
 	return gui
 end
 
 --[[
-	A full-screen root that pads itself by the current GuiInset. Every player-
-	facing panel should parent here rather than to the ScreenGui directly.
+	Panel parent for player-facing HUD.
+
+	InsetRoot uses Position/Size for GuiInset (no UIPadding). ScaleHost holds
+	UIScale + inverse Size so scale never shares a node with insets — that
+	pairing was shifting centered Brief/Result/Toast off the viewport midline.
 ]]
 function UIKit.safeArea(parent: Instance): Frame
-	local root = Instance.new("Frame")
-	root.Name = "SafeArea"
-	root.BackgroundTransparency = 1
-	root.BorderSizePixel = 0
-	root.Size = UDim2.fromScale(1, 1)
-	root.Parent = parent
+	local insetRoot = Instance.new("Frame")
+	insetRoot.Name = "InsetRoot"
+	insetRoot.BackgroundTransparency = 1
+	insetRoot.BorderSizePixel = 0
+	insetRoot.Size = UDim2.fromScale(1, 1)
+	insetRoot.Parent = parent
 
-	local padding = Instance.new("UIPadding")
-	padding.Name = "InsetPadding"
-	padding.Parent = root
+	local scaleHost = Instance.new("Frame")
+	scaleHost.Name = "SafeArea"
+	scaleHost.BackgroundTransparency = 1
+	scaleHost.BorderSizePixel = 0
+	scaleHost.Size = UDim2.fromScale(1, 1)
+	scaleHost.Parent = insetRoot
 
-	local function responsiveFactor(): number
-		local responsiveScale = parent:FindFirstChild("ResponsiveScale")
-		if responsiveScale and responsiveScale:IsA("UIScale") then
-			return math.max(0.01, responsiveScale.Scale)
-		end
-		return 1
-	end
+	local scale = Instance.new("UIScale")
+	scale.Name = "ResponsiveScale"
+	scale.Parent = scaleHost
 
 	local function applyInset()
-		local factor = responsiveFactor()
 		local inset = GuiService:GetGuiInset()
-		-- UIScale also scales the full-screen root. Grow its logical bounds by
-		-- the inverse factor so right/bottom anchored panels stay on-screen.
-		root.Size = UDim2.fromScale(1 / factor, 1 / factor)
-		-- Topbar + a little air; bottom for home indicator / gesture bar.
-		padding.PaddingTop = UDim.new(0, (inset.Y + 8) / factor)
-		padding.PaddingBottom = UDim.new(0, math.max(8, inset.Y * 0.35) / factor)
-		padding.PaddingLeft = UDim.new(0, 8 / factor)
-		padding.PaddingRight = UDim.new(0, 8 / factor)
+		local top = inset.Y + 8
+		local bottom = math.max(8, inset.Y * 0.35)
+		local left = 8
+		local right = 8
+		insetRoot.Position = UDim2.fromOffset(left, top)
+		insetRoot.Size = UDim2.new(1, -(left + right), 1, -(top + bottom))
 	end
 
 	applyInset()
 	pcall(function()
 		GuiService:GetPropertyChangedSignal("TopbarInset"):Connect(applyInset)
 	end)
-	local responsiveScale = parent:FindFirstChild("ResponsiveScale")
-	if responsiveScale and responsiveScale:IsA("UIScale") then
-		responsiveScale:GetPropertyChangedSignal("Scale"):Connect(applyInset)
-	end
-	return root
+	UIKit.bindResponsiveScale(scaleHost)
+	return scaleHost
 end
 
-function UIKit.bindResponsiveScale(gui: ScreenGui)
-	local scale = gui:FindFirstChild("ResponsiveScale")
+--[[
+	host is the ScaleHost Frame that owns ResponsiveScale. Keeps inverse Size
+	in lockstep with Scale so the host still fills InsetRoot after UIScale.
+]]
+function UIKit.bindResponsiveScale(host: GuiObject)
+	local scale = host:FindFirstChild("ResponsiveScale")
 	if not scale or not scale:IsA("UIScale") then
 		return
 	end
@@ -224,7 +231,9 @@ function UIKit.bindResponsiveScale(gui: ScreenGui)
 		local size = camera.ViewportSize
 		local design = UIKit.DesignResolution
 		local factor = math.min(size.X / design.X, size.Y / design.Y)
-		scale.Scale = math.clamp(factor, UIKit.MinScale, UIKit.MaxScale)
+		local clamped = math.clamp(factor, UIKit.MinScale, UIKit.MaxScale)
+		scale.Scale = clamped
+		host.Size = UDim2.fromScale(1 / clamped, 1 / clamped)
 	end
 
 	local viewportConnection: RBXScriptConnection? = nil

@@ -42,25 +42,25 @@ export type Badge = {
 local BADGES: { Badge } = {
 	{
 		key = "FirstDelivery",
-		assetId = 0,
+		assetId = 132860980817594,
 		label = "First Haul",
 		description = "Deliver a load to the depot.",
 	},
 	{
 		key = "SpotlessDelivery",
-		assetId = 0,
+		assetId = 831709615579183,
 		label = "Not A Scratch",
 		description = "Deliver with the load in perfect condition.",
 	},
 	{
 		key = "SavedIt",
-		assetId = 0,
+		assetId = 2074811750681195,
 		label = "Saved It",
 		description = "Deliver a load after a strap let go on the way.",
 	},
 	{
 		key = "TookTheRisk",
-		assetId = 0,
+		assetId = 2994664553098399,
 		label = "Took The Risk",
 		description = "Complete a contract the crew voted for under Catastrophe pressure.",
 	},

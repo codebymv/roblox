@@ -12,7 +12,8 @@ export type Settings = {
 
 local PROFILES: { [Name]: Settings } = {
 	Development = {
-		ShowDebugOverlay = true,
+		-- Off by default; F-toggle only mounts when this is true. Chat owns TL.
+		ShowDebugOverlay = false,
 		Telemetry = true,
 		LiveTuning = true,
 		RunArtifacts = true,

@@ -9,10 +9,12 @@
 ]]
 
 local ContextActionService = game:GetService("ContextActionService")
+local GuiService = game:GetService("GuiService")
 local Players = game:GetService("Players")
 local SocialService = game:GetService("SocialService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local StarterGui = game:GetService("StarterGui")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
@@ -192,7 +194,7 @@ type ContractCardUI = {
 }
 
 local gui, speedLabel, conditionLabel, readoutLabel, timeLabel, integrityLabel
-local objectiveLabel, hintLabel, dailyLabel, toastLabel, resultFrame, resultTitle, resultDetail, cashLabel
+local objectiveLabel, hintLabel, dailyLabel, toastFrame, toastLabel, resultFrame, resultTitle, resultDetail, cashLabel
 local contractFrame, contractTitle, contractFooter
 local inviteFrame, inviteButton
 local canInvite = false
@@ -234,13 +236,16 @@ local function setDimOverlay(frame: Frame, dimmed: boolean, caption: string?)
 			local captionLabel = Instance.new("TextLabel")
 			captionLabel.Name = "Caption"
 			captionLabel.BackgroundTransparency = 1
-			captionLabel.Size = UDim2.fromScale(1, 1)
+			-- Bottom band so prep-lock copy does not paint over strap bars / stats.
+			captionLabel.AnchorPoint = Vector2.new(0.5, 1)
+			captionLabel.Position = UDim2.new(0.5, 0, 1, -8)
+			captionLabel.Size = UDim2.new(1, -16, 0, 22)
 			captionLabel.Font = Enum.Font.GothamBold
-			captionLabel.TextSize = 13
+			captionLabel.TextSize = 12
 			captionLabel.TextColor3 = UIKit.Theme.Muted
 			captionLabel.TextWrapped = true
 			captionLabel.TextXAlignment = Enum.TextXAlignment.Center
-			captionLabel.TextYAlignment = Enum.TextYAlignment.Center
+			captionLabel.TextYAlignment = Enum.TextYAlignment.Bottom
 			captionLabel.ZIndex = 9
 			captionLabel.Parent = overlay
 		end
@@ -303,6 +308,13 @@ local function drainToast()
 end
 
 local function showToast(text: string)
+	-- Feature callouts already land in the Brief; don't stack a duplicate toast.
+	if objectiveLabel and objectiveLabel.Text == text then
+		return
+	end
+	if hintLabel and hintLabel.Text == text then
+		return
+	end
 	table.insert(toastQueue, text)
 	-- Cap so a spammy pressure cadence cannot bury the next landmark warning
 	-- under twenty stale messages.
@@ -975,14 +987,16 @@ local function buildGarage(parent: Instance)
 end
 
 local function build()
-	gui = UIKit.screen("CargoLabHUD", player:WaitForChild("PlayerGui"))
+	gui = UIKit.screen("CargoLabHUD", player:WaitForChild("PlayerGui"), 10)
 	safeRoot = UIKit.safeArea(gui)
 	local root = safeRoot
 
 	-- Without the numeric readout the status card is three lines tall, with
 	-- room left for the integrity warning that only appears when damaged.
+	-- Bottom-right: TextChat owns top-left; BR is clear of Brief/Controls.
 	local statusHeight = if DevConfig.ShowDebugOverlay then 198 else 162
-	statusFrame = panel(root, "Status", UDim2.fromOffset(8, 0), UDim2.fromOffset(300, statusHeight))
+	statusFrame = panel(root, "Status", UDim2.new(1, -8, 1, -8), UDim2.fromOffset(300, statusHeight))
+	statusFrame.AnchorPoint = Vector2.new(1, 1)
 	local status = statusFrame
 	statusAccent = UIKit.frame({
 		Name = "Accent",
@@ -1075,7 +1089,6 @@ local function build()
 		Enum.Font.GothamBold
 	)
 	cashLabel.TextColor3 = UIKit.Theme.Accent
-	cashLabel.ZIndex = 9
 
 	-- Scale-based width with a max so wide monitors do not stretch the brief
 	-- into a banner, and phones do not clip a 520px fixed card.
@@ -1083,7 +1096,8 @@ local function build()
 	local brief = briefFrame
 	brief.AnchorPoint = Vector2.new(0.5, 0)
 	local briefConstraint = Instance.new("UISizeConstraint")
-	briefConstraint.MaxSize = Vector2.new(560, 104)
+	-- Prep grows to 126 (daily line); MaxSize.Y must not clamp that layout.
+	briefConstraint.MaxSize = Vector2.new(560, 140)
 	briefConstraint.MinSize = Vector2.new(220, 78)
 	briefConstraint.Parent = brief
 
@@ -1133,16 +1147,16 @@ local function build()
 	dailyLabel.TextXAlignment = Enum.TextXAlignment.Center
 	dailyLabel.Visible = false
 
-	local toastPanel = panel(root, "Toast", UDim2.new(0.5, 0, 0, 112), UDim2.new(0.62, 0, 0, 36))
-	toastPanel.AnchorPoint = Vector2.new(0.5, 0)
-	toastPanel.BackgroundTransparency = 0.12
-	toastPanel.Visible = false
+	toastFrame = panel(root, "Toast", UDim2.new(0.5, 0, 0, 86), UDim2.new(0.62, 0, 0, 36))
+	toastFrame.AnchorPoint = Vector2.new(0.5, 0)
+	toastFrame.BackgroundTransparency = 0.12
+	toastFrame.Visible = false
 	local toastConstraint = Instance.new("UISizeConstraint")
 	toastConstraint.MaxSize = Vector2.new(520, 40)
 	toastConstraint.MinSize = Vector2.new(200, 32)
-	toastConstraint.Parent = toastPanel
+	toastConstraint.Parent = toastFrame
 	toastLabel =
-		label(toastPanel, "Text", UDim2.fromOffset(10, 0), UDim2.new(1, -20, 1, 0), "", 15, Enum.Font.GothamBold, true)
+		label(toastFrame, "Text", UDim2.fromOffset(10, 0), UDim2.new(1, -20, 1, 0), "", 15, Enum.Font.GothamBold, true)
 	toastLabel.TextXAlignment = Enum.TextXAlignment.Center
 	toastLabel.TextYAlignment = Enum.TextYAlignment.Center
 	toastLabel.TextColor3 = UIKit.Theme.Accent
@@ -1540,10 +1554,11 @@ refresh = function()
 			else badge.color
 	)
 	UIKit.setVisible(countdownLabel, isPrep)
+	local briefHeight = if isPrep then 126 else 78
 	if isPrep then
 		local seconds = snap.restartSeconds
 		UIKit.setText(countdownLabel, if seconds > 0 then tostring(seconds) else "GO!")
-		UIKit.setSize(briefFrame, UDim2.new(0.72, 0, 0, 126))
+		UIKit.setSize(briefFrame, UDim2.new(0.72, 0, 0, briefHeight))
 		UIKit.set(objectiveLabel, "Position", UDim2.fromOffset(14, 58))
 		UIKit.set(hintLabel, "Position", UDim2.fromOffset(14, 80))
 		UIKit.setVisible(dailyLabel, true)
@@ -1556,9 +1571,12 @@ refresh = function()
 		UIKit.setTextColor(dailyLabel, if snap.dailyClaimed then UIKit.Theme.Muted else UIKit.Theme.Accent)
 	else
 		UIKit.setVisible(dailyLabel, false)
-		UIKit.setSize(briefFrame, UDim2.new(0.72, 0, 0, 78))
+		UIKit.setSize(briefFrame, UDim2.new(0.72, 0, 0, briefHeight))
 		UIKit.set(objectiveLabel, "Position", UDim2.fromOffset(14, 28))
 		UIKit.set(hintLabel, "Position", UDim2.fromOffset(14, 52))
+	end
+	if toastFrame then
+		UIKit.set(toastFrame, "Position", UDim2.new(0.5, 0, 0, briefHeight + 8))
 	end
 
 	if isPrep then
@@ -1611,7 +1629,8 @@ refresh = function()
 		UIKit.setText(timeLabel, string.format("%s LEFT", formatRecordTime(snap.timeRemaining)))
 	end
 
-	setDimOverlay(statusFrame, isPrep or isResult, if isPrep then "Run stats unlock at GO" else "Run finished")
+	-- Result hides this panel entirely; dim only during Staging prep lock.
+	setDimOverlay(statusFrame, isPrep, "Run stats unlock at GO")
 
 	local swapObjective = nil
 	local swapHint = nil
@@ -1659,18 +1678,21 @@ refresh = function()
 	end
 
 	if strapPanelFrame then
-		setDimOverlay(strapPanelFrame, not isRun, if isPrep then "Straps matter once GO hits" else "Run finished")
+		-- Result hides straps; prep keeps them visible but locked.
+		setDimOverlay(strapPanelFrame, isPrep, "Straps matter once GO hits")
 	end
 
 	if driveFrame then
 		local showPad = isRun and DeviceInput.wantsTouchDrive()
 		UIKit.setVisible(driveFrame, showPad)
-		if swapActive then
-			setDimOverlay(driveFrame, true, "Crew handoff")
-		elseif not isRun then
-			setDimOverlay(driveFrame, true, "Drive unlocks at GO")
-		else
-			setDimOverlay(driveFrame, false)
+		-- Custom pad owns the corners; Roblox jump/stick must not sit under BRAKE.
+		GuiService.TouchControlsEnabled = not showPad
+		if showPad then
+			if swapActive then
+				setDimOverlay(driveFrame, true, "Crew handoff")
+			else
+				setDimOverlay(driveFrame, false)
+			end
 		end
 	end
 
@@ -1807,7 +1829,8 @@ refresh = function()
 			else workChrome
 	)
 
-	setDimOverlay(stationRowFrame, isResult, "Run finished")
+	-- Station row lives inside Controls, which is hidden for the whole Result.
+	setDimOverlay(stationRowFrame, false)
 
 	local camera = Workspace.CurrentCamera
 	local narrow = camera ~= nil and camera.ViewportSize.X < 760
@@ -1815,17 +1838,38 @@ refresh = function()
 		then safeRoot.AbsoluteSize.Y
 		elseif camera then camera.ViewportSize.Y
 		else 720
-	local shortViewport = viewportHeight < 700
-	local compactContract = showResult and snap.offer ~= nil and shortViewport
-	-- On short screens these corner panels would sit underneath the centered
-	-- result/decision stack. Restore them as soon as the board closes.
-	UIKit.setVisible(statusFrame, not compactContract)
-	UIKit.setVisible(briefFrame, not compactContract)
-	UIKit.setVisible(strapPanelFrame, not compactContract)
-	UIKit.setVisible(controlsFrame, not compactContract)
-	-- Offered between runs, once there is a verdict to share. Hidden on short
-	-- screens with a board up, where it would sit under the decision stack.
-	UIKit.setVisible(inviteFrame, canInvite and not spectating and (isResult or isPrep) and not compactContract)
+	-- Result is always modal. Offer always uses the compact Result+Contract stack
+	-- (no shortViewport gate — tall desktops were keeping run chrome up).
+	local modalResult = showResult
+	local compactContract = showResult and snap.offer ~= nil
+	UIKit.setVisible(statusFrame, not modalResult)
+	UIKit.setVisible(briefFrame, not modalResult)
+	UIKit.setVisible(strapPanelFrame, not modalResult)
+	UIKit.setVisible(controlsFrame, not modalResult)
+	if driveFrame and modalResult then
+		UIKit.setVisible(driveFrame, false)
+		GuiService.TouchControlsEnabled = true
+	end
+	-- Status lives BR (chat owns TL). Lift above the touch Drive pad when both show.
+	if statusFrame and not modalResult then
+		local showPad = isRun and DeviceInput.wantsTouchDrive()
+		UIKit.set(statusFrame, "AnchorPoint", Vector2.new(1, 1))
+		UIKit.set(statusFrame, "Position", if showPad then UDim2.new(1, -8, 1, -216) else UDim2.new(1, -8, 1, -8))
+	end
+
+	local showInvite = canInvite and not spectating and (isResult or isPrep)
+	UIKit.setVisible(inviteFrame, showInvite)
+	if inviteFrame and showInvite then
+		if isResult then
+			-- Bottom-center under the Result/Contract stack.
+			UIKit.set(inviteFrame, "AnchorPoint", Vector2.new(0.5, 1))
+			UIKit.set(inviteFrame, "Position", UDim2.new(0.5, 0, 1, -12))
+		else
+			-- Prep: above Controls (BL). Status owns BR.
+			UIKit.set(inviteFrame, "AnchorPoint", Vector2.new(0, 1))
+			UIKit.set(inviteFrame, "Position", UDim2.new(0, 12, 1, -184))
+		end
+	end
 	-- The contract decision is the between-run interaction. Do not make it
 	-- compete with paint browsing for either attention or screen space.
 	local showGarage = (isPrep or (isResult and snap.offer == nil)) and not spectating
@@ -2256,6 +2300,7 @@ local function bindInputs()
 			if driveFrame then
 				local showPad = latest.phase == "Run" and DeviceInput.wantsTouchDrive()
 				UIKit.setVisible(driveFrame, showPad)
+				GuiService.TouchControlsEnabled = not showPad
 			end
 			-- Refresh chrome verbs immediately so Touch does not keep "HOLD E".
 			if workButton and switchButton and restartButton then
@@ -2281,6 +2326,7 @@ local function bindInputs()
 		if driveFrame and latest then
 			local showPad = latest.phase == "Run" and DeviceInput.wantsTouchDrive()
 			UIKit.setVisible(driveFrame, showPad)
+			GuiService.TouchControlsEnabled = not showPad
 		end
 	end)
 
@@ -2519,6 +2565,13 @@ function LabUI.mount()
 	build()
 	bindInputs()
 	bindCamera()
+
+	-- PlayerList sits in CoreGui above PlayerGui and covers the strap card.
+	-- Chat stays enabled — DisplayOrder cannot win against TextChat.
+	pcall(function()
+		StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.PlayerList, false)
+	end)
+	GuiService.TouchControlsEnabled = true
 
 	LabRemotes.onClient(Net.Names.LabSnapshot, function(snap: LabTypes.LabSnapshot)
 		local previousRole = latest and latest.myRole

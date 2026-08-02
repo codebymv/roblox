@@ -165,13 +165,9 @@ local FINISHES: { Finish } = {
 		cost = 4500,
 		premium = false,
 		material = "Metal",
-		--[[
-			White, because the colour lives in the texture. Tinting a gold albedo
-			would apply gold twice. Until the texture id is set this renders as
-			plain metal in the player's own paint, which is a duller Solid Gold
-			but not a broken one.
-		]]
-		tint = Color3.fromRGB(255, 255, 255),
+		-- Built-in Metal plus a deliberate gold colour keeps this finish usable
+		-- without an uploaded texture that can be delayed or moderated away.
+		tint = Color3.fromRGB(212, 175, 55),
 		overridesPaint = true,
 		textureId = 0,
 		reflectance = 0.45,
@@ -229,6 +225,38 @@ function Cosmetics.finish(id: string?): Finish?
 		end
 	end
 	return nil
+end
+
+local function clampChannel(value: number): number
+	return math.clamp(value, 0, 1)
+end
+
+-- Multiplication is the contract of a finish tint: white preserves the paint,
+-- grey darkens it, and a coloured treatment shifts it without hidden state.
+function Cosmetics.multiplyColor(left: Color3, right: Color3): Color3
+	return Color3.new(left.R * right.R, left.G * right.G, left.B * right.B)
+end
+
+function Cosmetics.treatedColor(paint: Color3, finish: Finish): Color3
+	if finish.overridesPaint then
+		return finish.tint
+	end
+	return Cosmetics.multiplyColor(paint, finish.tint)
+end
+
+function Cosmetics.shadeColor(color: Color3, shade: number): Color3
+	local amount = math.max(0, shade)
+	return Color3.new(clampChannel(color.R * amount), clampChannel(color.G * amount), clampChannel(color.B * amount))
+end
+
+-- Client presentation uses synchronized time as phase. The equipped paint
+-- supplies the starting hue and brightness; the finish moves that hue rather
+-- than replacing the player's choice with one fixed premium colour.
+function Cosmetics.holographicColor(paint: Color3, shade: number, phase: number): Color3
+	local hue, saturation, value = paint:ToHSV()
+	local vividSaturation = math.clamp(math.max(0.68, saturation), 0, 1)
+	local visibleValue = math.clamp(math.max(0.62, value) * math.max(0, shade), 0, 1)
+	return Color3.fromHSV((hue + phase) % 1, vividSaturation, visibleValue)
 end
 
 --[[
