@@ -255,6 +255,38 @@ VfxSpec.WheelSpray = {
 		drag = 3.8,
 		lightEmission = 0,
 	} :: Continuous,
+	--[[
+		Ice throws almost nothing. That is the point: the surface that most
+		deserves a warning is the one that looks calmest, and the spray staying
+		quiet while the handling changes is the trap working as intended. The
+		tyre note and the steering tell the story instead.
+	]]
+	Ice = {
+		rate = 14,
+		lifetime = NumberRange.new(0.25, 0.5),
+		speed = NumberRange.new(1, 4),
+		spreadDegrees = 22,
+		sizeStart = 0.22,
+		sizeEnd = 0.5,
+		transparencyStart = 0.62,
+		color = Color3.fromRGB(214, 232, 245),
+		acceleration = Vector3.new(0, 2, 0),
+		drag = 4,
+		lightEmission = 0.35,
+	} :: Continuous,
+	Snow = {
+		rate = 52,
+		lifetime = NumberRange.new(0.45, 0.95),
+		speed = NumberRange.new(4, 11),
+		spreadDegrees = 46,
+		sizeStart = 0.55,
+		sizeEnd = 2,
+		transparencyStart = 0.32,
+		color = Color3.fromRGB(238, 244, 250),
+		acceleration = Vector3.new(0, 3, 0),
+		drag = 3.4,
+		lightEmission = 0.2,
+	} :: Continuous,
 	Bridge = {
 		rate = 12,
 		lifetime = NumberRange.new(0.2, 0.45),

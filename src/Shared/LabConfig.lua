@@ -143,11 +143,29 @@ local LabConfig = {
 
 	-- ------------------------------------------------------------ surfaces
 	-- gripScale, rollingResistance (studs/s^2)
+	--[[
+		Grip scales the traction budget at each contact patch; resistance is
+		rolling drag. The pair is what makes a surface a mechanic rather than a
+		colour, and the two axes are deliberately independent:
+
+		  Rough     some grip lost, some drag        bumps and scrub
+		  Shoulder  half grip, heavy drag            leaving the road hurts
+		  Ice       grip nearly halved, no drag      you keep the speed you
+		                                             cannot use
+		  Snow      moderate grip, heavy drag        the verge, but deeper
+
+		Ice is the one that is new in kind. Every other surface that takes grip
+		away also takes speed away, which quietly forgives the mistake. Ice does
+		not: it lets a driver arrive at the next corner carrying exactly the
+		speed that got them into trouble.
+	]]
 	Surfaces = {
 		Road = { grip = 1, resistance = 0 },
 		Rough = { grip = 0.82, resistance = 3.5 },
 		Shoulder = { grip = 0.5, resistance = 11 },
 		Bridge = { grip = 1, resistance = 0 },
+		Ice = { grip = 0.42, resistance = 0 },
+		Snow = { grip = 0.72, resistance = 6 },
 	},
 
 	-- ----------------------------------------------------------------- cargo

@@ -122,16 +122,171 @@ local PLAN: { RouteSections.Step } = {
 	{ kind = Point, at = Vector3.new(1962, -106, 2620), width = 30 },
 }
 
+--[[
+	Leg two: The Pass.
+
+	Route one teaches. This one tests, and it tests different things rather than
+	the same things harder -- a longer version of the foothills would just be
+	attrition.
+
+	  - The run-up is a fifth as long. The crew is warm; re-teaching the throttle
+	    would waste the only stretch where nobody is in trouble.
+	  - It opens with a switchback instead of a single blind corner, so a crew
+	    that braced for the first turn is on the wrong side for the second.
+	  - Ice replaces the rough section as the surface hazard. Rough takes speed
+	    away with the grip, which forgives; ice takes only the grip, so a driver
+	    arrives at the next corner carrying exactly the speed that got them into
+	    trouble.
+	  - Two bridges, and the second one is entered off a descending traverse, so
+	    the speed you cross it with is not a speed you chose.
+	  - It ends short. The last quarter of route one is a run-in; here the road
+	    is still asking questions at the depot gate.
+
+	Authored well clear of route one in world space so both can exist at once.
+]]
+local PASS_PLAN: { RouteSections.Step } = {
+	-- 1. Short run-up. Long enough to settle the load, not long enough to relax.
+	{ kind = Point, at = Vector3.new(6000, 0, 0), width = 32 },
+	{ kind = Point, at = Vector3.new(6000, 0, 180), width = 32 },
+
+	-- 2. Switchback. Right, then immediately left.
+	{
+		kind = Curve,
+		control = Vector3.new(6000, -2, 300),
+		at = Vector3.new(6120, -6, 340),
+		width = 28,
+		bankDeg = -7,
+		steps = 14,
+	},
+	{
+		kind = Curve,
+		control = Vector3.new(6260, -10, 380),
+		at = Vector3.new(6260, -16, 520),
+		width = 26,
+		bankDeg = 6,
+		steps = 14,
+	},
+
+	-- 3. Ice. Flat, fast, and it looks like the breather it is not.
+	{ kind = Point, at = Vector3.new(6260, -18, 700), width = 26, surface = "Ice" },
+	{ kind = Point, at = Vector3.new(6260, -20, 980), width = 26, surface = "Ice" },
+
+	-- 4. Climb to the first crossing. A load already sliding costs you here in
+	--    a way it never does on the flat.
+	{ kind = Point, at = Vector3.new(6260, -8, 1120), width = 26 },
+	{ kind = Point, at = Vector3.new(6260, 10, 1260), width = 24 },
+
+	-- 5. First bridge, at the top, in the wind.
+	{ kind = Point, at = Vector3.new(6260, 14, 1300), width = 20, shoulders = false },
+	{ kind = Point, at = Vector3.new(6260, 16, 1330), width = 13, surface = "Bridge", shoulders = false },
+	{ kind = Point, at = Vector3.new(6260, 16, 1480), width = 13, surface = "Bridge", shoulders = false },
+	{ kind = Point, at = Vector3.new(6260, 14, 1510), width = 20, shoulders = false },
+
+	-- 6. Descending traverse, on ice. The hardest stretch on either route: the
+	--    grade adds the speed and the surface refuses to take it back.
+	{ kind = Point, at = Vector3.new(6260, -2, 1620), width = 24, surface = "Ice" },
+	{ kind = Point, at = Vector3.new(6300, -26, 1760), width = 22, surface = "Ice" },
+	{ kind = Point, at = Vector3.new(6380, -52, 1900), width = 22, surface = "Ice" },
+
+	-- 7. Second bridge, entered with whatever the traverse gave you.
+	{ kind = Point, at = Vector3.new(6420, -62, 1960), width = 18, shoulders = false },
+	{ kind = Point, at = Vector3.new(6440, -66, 1990), width = 13, surface = "Bridge", shoulders = false },
+	{ kind = Point, at = Vector3.new(6440, -66, 2200), width = 13, surface = "Bridge", shoulders = false },
+	{ kind = Point, at = Vector3.new(6440, -64, 2230), width = 20, shoulders = false },
+
+	-- 8. Chicane through deep snow, so a wide line costs drag and not just time.
+	{
+		kind = Curve,
+		control = Vector3.new(6440, -62, 2320),
+		at = Vector3.new(6360, -58, 2400),
+		width = 22,
+		bankDeg = 5,
+		steps = 12,
+	},
+	{
+		kind = Curve,
+		control = Vector3.new(6280, -54, 2480),
+		at = Vector3.new(6360, -50, 2560),
+		width = 22,
+		bankDeg = -5,
+		steps = 12,
+	},
+
+	-- 9. Climb out.
+	{ kind = Point, at = Vector3.new(6380, -36, 2680), width = 24 },
+
+	-- 10. Rough shelf, taken with whatever is left.
+	{ kind = Point, at = Vector3.new(6400, -30, 2800), width = 26, surface = "Rough" },
+	{ kind = Point, at = Vector3.new(6400, -28, 2900), width = 26, surface = "Rough" },
+
+	-- 11. Short run-in. Still asking questions at the gate.
+	{ kind = Point, at = Vector3.new(6400, -26, 3000), width = 28 },
+	{ kind = Point, at = Vector3.new(6400, -25, 3120), width = 30 },
+}
+
+export type Route = {
+	id: string,
+	label: string,
+	blurb: string,
+	-- Palette the dressing reads. Geometry and look are separate on purpose: a
+	-- third route can be this one in a different season.
+	skin: string,
+	plan: { RouteSections.Step },
+	-- Named for the landmark and the warp targets that still point at it.
+	cornerPosition: Vector3,
+}
+
+--[[
+	Legs, in the order a session climbs them. Index is the leg number, so
+	finishing leg one puts a crew on leg two rather than back where they started.
+]]
+local ROUTES: { Route } = {
+	{
+		id = "Foothills",
+		label = "THE FOOTHILLS",
+		blurb = "Long road, one blind corner, one bridge.",
+		skin = "Temperate",
+		plan = PLAN,
+		cornerPosition = Vector3.new(0, 0, 420),
+	},
+	{
+		id = "ThePass",
+		label = "THE PASS",
+		blurb = "Switchbacks, ice, and two crossings.",
+		skin = "Alpine",
+		plan = PASS_PLAN,
+		cornerPosition = Vector3.new(6120, -6, 340),
+	},
+}
+
 local LabRoute = {}
 
+LabRoute.Routes = ROUTES
 LabRoute.Plan = PLAN
 
 -- Where the blind right-hander is, for the landmark and the warp targets that
 -- still name it directly.
-LabRoute.CornerPosition = Vector3.new(0, 0, 420)
+LabRoute.CornerPosition = ROUTES[1].cornerPosition
 
-function LabRoute.nodes(): { RouteSections.RouteNode }
-	return RouteSections.build(PLAN)
+-- A leg past the last authored route repeats the hardest one rather than
+-- ending the session. Running out of road should not be a failure state.
+function LabRoute.forLeg(leg: number): Route
+	local index = math.clamp(math.floor(leg or 1), 1, #ROUTES)
+	return ROUTES[index]
+end
+
+function LabRoute.byId(id: string?): Route?
+	for _, route in ROUTES do
+		if route.id == id then
+			return route
+		end
+	end
+	return nil
+end
+
+function LabRoute.nodes(routeId: string?): { RouteSections.RouteNode }
+	local route = LabRoute.byId(routeId) or ROUTES[1]
+	return RouteSections.build(route.plan)
 end
 
 return LabRoute

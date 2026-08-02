@@ -751,6 +751,105 @@ check("a route plan must start somewhere", function()
 	assert(not unknown, "An unknown step kind was silently ignored")
 end)
 
+--[[
+	Every route has to clear the same bar, not just the one that shipped first.
+	A second route is where quality quietly diverges: nothing fails, the level
+	is simply worse, and nobody finds out until a playtest says the snow one is
+	boring.
+]]
+check("every leg is a real road with the features difficulty needs", function()
+	for index, route in LabRoute.Routes do
+		local nodes = LabRoute.nodes(route.id)
+		assert(#nodes > 20, route.id .. " has only " .. #nodes .. " nodes")
+
+		local points, cumulative, surfaces, total = RouteSections.measure(nodes)
+		-- Long enough to be a run, short enough to stay a run.
+		assert(total > 2000 and total < 4400, string.format("%s is %d studs long", route.id, total))
+
+		local features = RouteFeatures.detect(points, cumulative, surfaces, total)
+		assert(RouteFeatures.countOf(features, "Corner") >= 2, route.id .. " has fewer than two corners")
+		assert(RouteFeatures.countOf(features, "Bridge") >= 1, route.id .. " has no bridge")
+
+		-- The opener aims at the first corner, so every route needs one early.
+		local firstCorner = RouteFeatures.firstOf(features, "Corner")
+		assert(firstCorner and firstCorner < 0.35, route.id .. " makes the crew wait too long for its first corner")
+
+		assert(route.label ~= "" and route.blurb ~= "", route.id .. " is missing its copy")
+		assert(route.skin ~= "", route.id .. " has no skin")
+		assert(LabRoute.forLeg(index).id == route.id, "Leg " .. index .. " does not resolve to " .. route.id)
+	end
+end)
+
+check("no two legs share a road or a patch of world", function()
+	local seenId = {}
+	local seenSkin = {}
+	for _, route in LabRoute.Routes do
+		assert(not seenId[route.id], "Duplicate route id: " .. route.id)
+		seenId[route.id] = true
+		seenSkin[route.skin] = (seenSkin[route.skin] or 0) + 1
+	end
+
+	-- Both routes exist in the same world at once, so their geometry must not
+	-- overlap or one road's shoulders end up inside the other's bridge.
+	local boxes = {}
+	for _, route in LabRoute.Routes do
+		local minX, maxX = math.huge, -math.huge
+		local minZ, maxZ = math.huge, -math.huge
+		for _, entry in LabRoute.nodes(route.id) do
+			minX = math.min(minX, entry.position.X - entry.width)
+			maxX = math.max(maxX, entry.position.X + entry.width)
+			minZ = math.min(minZ, entry.position.Z - entry.width)
+			maxZ = math.max(maxZ, entry.position.Z + entry.width)
+		end
+		table.insert(boxes, { id = route.id, minX = minX, maxX = maxX, minZ = minZ, maxZ = maxZ })
+	end
+
+	for first = 1, #boxes do
+		for second = first + 1, #boxes do
+			local a, b = boxes[first], boxes[second]
+			local overlaps = a.minX <= b.maxX and b.minX <= a.maxX and a.minZ <= b.maxZ and b.minZ <= a.maxZ
+			assert(not overlaps, a.id .. " and " .. b.id .. " occupy the same ground")
+		end
+	end
+end)
+
+--[[
+	The Pass is meant to test rather than teach. If it stops being harder than
+	the road before it, the leg ladder has no rungs.
+]]
+check("leg two is harder than leg one in the ways it claims", function()
+	local foothills = LabRoute.nodes("Foothills")
+	local pass = LabRoute.nodes("ThePass")
+
+	local function surfaceCount(nodes, surface)
+		local total = 0
+		for _, entry in nodes do
+			if entry.surface == surface then
+				total += 1
+			end
+		end
+		return total
+	end
+
+	local function averageWidth(nodes)
+		local total = 0
+		for _, entry in nodes do
+			total += entry.width
+		end
+		return total / math.max(1, #nodes)
+	end
+
+	assert(surfaceCount(pass, "Ice") > 0, "The Pass has no ice, which is its whole surface hazard")
+	assert(surfaceCount(foothills, "Ice") == 0, "Ice leaked onto the teaching route")
+
+	local _, _, passSurfaces, passTotal = RouteSections.measure(pass)
+	local _, passCumulative = RouteSections.measure(pass)
+	local passFeatures = RouteFeatures.detect((RouteSections.measure(pass)), passCumulative, passSurfaces, passTotal)
+	assert(RouteFeatures.countOf(passFeatures, "Bridge") >= 2, "The Pass was meant to have two crossings")
+
+	assert(averageWidth(pass) < averageWidth(foothills), "The Pass is not tighter than the Foothills")
+end)
+
 -- ------------------------------------------------------------ route features
 
 --[[
