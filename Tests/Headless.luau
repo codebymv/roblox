@@ -70,6 +70,7 @@ local AudioIds = loadShared("AudioIds")
 local Achievements = loadShared("Achievements")
 local AudioMix = loadShared("AudioMix")
 local Commerce = loadShared("Commerce")
+local DailyContract = loadShared("DailyContract")
 local ImpactTiers = loadShared("ImpactTiers")
 local VfxSpec = loadShared("VfxSpec")
 local PresentationMath = loadShared("PresentationMath")
@@ -598,6 +599,111 @@ check("every record the result screen can announce has words", function()
 	local records = Achievements.defaultRecords()
 	for key in records do
 		assert(Achievements.RecordLabel[key], "Record " .. key .. " has no label for the result screen")
+	end
+end)
+
+-- ------------------------------------------------------------- daily contract
+
+local function dailyFacts(overrides)
+	local facts = {
+		outcome = "Delivered",
+		cargoReadout = 100,
+		chassisIntegrity = 100,
+		strapBreaks = 0,
+		strapRefits = 0,
+		throws = 0,
+		durationSeconds = 140,
+		riskyContract = false,
+	}
+	for key, value in overrides or {} do
+		facts[key] = value
+	end
+	return facts
+end
+
+--[[
+	The trap this exists to catch: a daily that can be completed by not
+	finishing. An objective phrased around what did not happen -- no strap
+	broke, no dent taken -- is trivially satisfied by a truck that never left
+	the depot, which would pay players for wrecking on purpose.
+]]
+check("no daily can be completed without arriving", function()
+	for _, outcome in { "TruckWrecked", "CargoLost", "TimeExpired", "Abandoned" } do
+		for _, objective in DailyContract.Objectives do
+			local facts = dailyFacts({ outcome = outcome, riskyContract = true, strapBreaks = 1 })
+			assert(
+				not DailyContract.isMet(objective, facts),
+				objective.id .. " was completed by a run that ended in " .. outcome
+			)
+		end
+	end
+end)
+
+check("the daily changes every day and repeats predictably", function()
+	local seen = {}
+	for day = 0, #DailyContract.Objectives - 1 do
+		local objective = DailyContract.forDay(day)
+		assert(objective, "Day " .. day .. " has no objective")
+		assert(not seen[objective.id], "The rotation repeats inside one cycle")
+		seen[objective.id] = true
+		assert(DailyContract.forDay(day) == DailyContract.forDay(day), "The same day gave two different objectives")
+		assert(DailyContract.forDay(day + 1) ~= objective, "Two days in a row share an objective")
+	end
+
+	-- Every objective is reachable, and the cycle closes.
+	assert(DailyContract.forDay(#DailyContract.Objectives) == DailyContract.forDay(0), "The rotation does not cycle")
+	-- A clock before the epoch, or a broken one, still resolves to something.
+	assert(DailyContract.forDay(-5) ~= nil, "A negative day has no objective")
+	assert(DailyContract.dayFromUnix(-100) == 0, "A negative timestamp escaped the clamp")
+end)
+
+check("each daily is met by its own run and not by the others", function()
+	local matches = {
+		Spotless = dailyFacts({ cargoReadout = 92, chassisIntegrity = 40, durationSeconds = 200 }),
+		Unbroken = dailyFacts({ cargoReadout = 40, chassisIntegrity = 40, durationSeconds = 200 }),
+		Express = dailyFacts({ cargoReadout = 40, chassisIntegrity = 40, durationSeconds = 120 }),
+		Straightener = dailyFacts({ cargoReadout = 40, chassisIntegrity = 40, strapBreaks = 2, durationSeconds = 200 }),
+		Nerve = dailyFacts({ cargoReadout = 40, chassisIntegrity = 40, riskyContract = true, durationSeconds = 200 }),
+		Panelbeater = dailyFacts({ cargoReadout = 40, chassisIntegrity = 95, durationSeconds = 200 }),
+	}
+
+	for _, objective in DailyContract.Objectives do
+		local facts = matches[objective.id]
+		assert(facts, "No fixture for daily " .. objective.id)
+		assert(DailyContract.isMet(objective, facts), objective.id .. " rejected the run built to satisfy it")
+	end
+
+	-- Unbroken and Straightener are deliberate opposites; nothing should satisfy
+	-- both, or the rotation contains a day that is two days.
+	local unbroken = DailyContract.byId("Unbroken")
+	local straightener = DailyContract.byId("Straightener")
+	for _, facts in matches do
+		assert(
+			not (DailyContract.isMet(unbroken, facts) and DailyContract.isMet(straightener, facts)),
+			"One run satisfied both the break and the no-break objective"
+		)
+	end
+end)
+
+check("a daily is claimable once per day and expires by itself", function()
+	assert(not DailyContract.isClaimed(nil, 100), "A profile that never claimed reported a claim")
+	assert(not DailyContract.isClaimed(0, 100), "A stale claim day counted as today")
+	assert(DailyContract.isClaimed(100, 100), "Today's claim was not recognised")
+	-- The expiry is the whole reason this is a day number rather than a flag.
+	assert(not DailyContract.isClaimed(100, 101), "Yesterday's claim blocked today's bonus")
+end)
+
+check("every daily is worth taking a detour for", function()
+	local ids = {}
+	for _, objective in DailyContract.Objectives do
+		assert(not ids[objective.id], "Duplicate daily id: " .. objective.id)
+		ids[objective.id] = true
+		assert(objective.label ~= "" and objective.brief ~= "", objective.id .. " is missing its copy")
+		-- A clean delivery pays about 135. A bonus under that would make the
+		-- daily worth less than simply running again, which is not a reason to
+		-- come back.
+		local cleanRun = LabProgression.rewardFor("Delivered", 100, 100)
+		assert(objective.bonus > cleanRun, objective.id .. " pays less than just doing another run")
 	end
 end)
 

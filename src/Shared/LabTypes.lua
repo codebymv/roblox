@@ -197,6 +197,16 @@ export type LabSnapshot = {
 	records: PersonalRecords?,
 	recordsBeaten: { string }?,
 
+	--[[
+		Today's objective. The label and brief are the same for every player on
+		every server; whether it is claimed, and what the run just paid, are not.
+	]]
+	dailyLabel: string,
+	dailyBrief: string,
+	dailyBonus: number,
+	dailyClaimed: boolean,
+	dailyEarned: number,
+
 	-- Persistent public-build progression. Paint definitions themselves are
 	-- static in TruckPaints; only ownership and the equipped choice cross the wire.
 	progressionReady: boolean,

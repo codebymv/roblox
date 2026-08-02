@@ -13,6 +13,7 @@ local Players = game:GetService("Players")
 local SocialService = game:GetService("SocialService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
@@ -74,12 +75,15 @@ local TOUCH_MIN = 44
 local COMPACT_RESULT = {
 	TitleY = 4,
 	TitleHeight = 30,
-	DetailHeight = 40,
+	-- Tall enough for the longest RunCauses wreck line at 13px on a 280px card.
+	DetailHeight = 58,
 	QuestionHeight = 18,
 	Gap = 2,
 	Padding = 6,
 }
 local TOAST_HOLD = 3.2
+local TOAST_FADE_IN = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local TOAST_FADE_OUT = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
 local PRESENTATION_RATE = 14
 local PRESENTATION_INTERVAL = 1 / 30
 local PENDING_ACTION_TIMEOUT = 2
@@ -87,7 +91,8 @@ local STRAP_PANEL_HEIGHT = 194
 local GARAGE_TOP = STRAP_PANEL_HEIGHT + 8
 
 local keyForward, keyReverse, keyLeft, keyRight, keyBrake = false, false, false, false, false
-local touchForward, touchReverse, touchLeft, touchRight, touchBrake = false, false, false, false, false
+local touchSteerAxis, touchThrottleAxis = 0, 0
+local touchBrake = false
 local padThrottle, padReverse, padSteer, padBrake = 0, 0, 0, false
 local working = false
 local driveAccumulator = 0
@@ -186,7 +191,7 @@ type ContractCardUI = {
 }
 
 local gui, speedLabel, conditionLabel, readoutLabel, timeLabel, integrityLabel
-local objectiveLabel, hintLabel, toastLabel, resultFrame, resultTitle, resultDetail, cashLabel
+local objectiveLabel, hintLabel, dailyLabel, toastLabel, resultFrame, resultTitle, resultDetail, cashLabel
 local contractFrame, contractTitle, contractFooter
 local inviteFrame, inviteButton
 local canInvite = false
@@ -265,16 +270,34 @@ local function drainToast()
 	toastShowing = true
 	local toastPanel = toastLabel.Parent
 	if toastPanel and toastPanel:IsA("GuiObject") then
+		toastPanel.BackgroundTransparency = 0.55
 		toastPanel.Visible = true
+		TweenService:Create(toastPanel, TOAST_FADE_IN, { BackgroundTransparency = 0.12 }):Play()
 	end
+	toastLabel.TextTransparency = 1
+	toastLabel.TextStrokeTransparency = 1
 	toastLabel.Text = nextText
+	TweenService:Create(toastLabel, TOAST_FADE_IN, { TextTransparency = 0, TextStrokeTransparency = 0.5 }):Play()
 	task.delay(TOAST_HOLD, function()
-		toastLabel.Text = ""
 		if toastPanel and toastPanel:IsA("GuiObject") then
-			toastPanel.Visible = false
+			TweenService:Create(toastPanel, TOAST_FADE_OUT, { BackgroundTransparency = 1 }):Play()
 		end
-		toastShowing = false
-		drainToast()
+		local fadeOut = TweenService:Create(toastLabel, TOAST_FADE_OUT, {
+			TextTransparency = 1,
+			TextStrokeTransparency = 1,
+		})
+		fadeOut:Play()
+		fadeOut.Completed:Connect(function()
+			toastLabel.Text = ""
+			if toastPanel and toastPanel:IsA("GuiObject") then
+				toastPanel.Visible = false
+				toastPanel.BackgroundTransparency = 0.12
+			end
+			toastLabel.TextTransparency = 0
+			toastLabel.TextStrokeTransparency = 0.5
+			toastShowing = false
+			drainToast()
+		end)
 	end)
 end
 
@@ -616,7 +639,7 @@ local function buildControls(parent: Instance): Frame
 			if snap and snap.phase ~= "Run" then
 				showToast("Wait for GO to work a strap.")
 			elseif snap and snap.myRole == "Driver" then
-				showToast("Switch to strapper (T) to work a strap.")
+				showToast("Switch to strapper to work a strap.")
 			end
 			return
 		end
@@ -640,7 +663,8 @@ local function buildControls(parent: Instance): Frame
 
 	local function clearDriveLocal()
 		keyForward, keyReverse, keyLeft, keyRight, keyBrake = false, false, false, false, false
-		touchForward, touchReverse, touchLeft, touchRight, touchBrake = false, false, false, false, false
+		touchSteerAxis, touchThrottleAxis = 0, 0
+		touchBrake = false
 		padThrottle, padReverse, padSteer, padBrake = 0, 0, 0, false
 	end
 
@@ -664,13 +688,37 @@ local function buildControls(parent: Instance): Frame
 	return frame
 end
 
-local function currentDriveInput()
-	local throttle = (if keyForward or touchForward then 1 else 0) - (if keyReverse or touchReverse then 1 else 0)
-	throttle += padThrottle - padReverse
+local function controlChromeLabels(device: string): (string, string, string)
+	if device == "Touch" then
+		return "HOLD · WORK", "ROLE", "RESET"
+	elseif device == "Gamepad" then
+		return "HOLD A · WORK", "Y · ROLE", "SELECT · RESET"
+	end
+	return "HOLD E · WORK", "T · ROLE", "R · RESET"
+end
 
-	local steering = (if keyRight or touchRight then 1 else 0) - (if keyLeft or touchLeft then 1 else 0)
+local function workIdleLabel(snap: LabTypes.LabSnapshot, device: string): string
+	local verb = if device == "Gamepad" then "A" elseif device == "Touch" then "HOLD" else "E"
+	if snap.myStation then
+		return verb .. " · " .. snap.myStation
+	end
+	if snap.myRole == "Driver" and snap.solo then
+		return verb .. " · STRAP"
+	end
+	return "NO STATION"
+end
+
+local function currentDriveInput()
+	local throttle = (if keyForward then 1 else 0) - (if keyReverse then 1 else 0)
+	throttle += padThrottle - padReverse
+	throttle += touchThrottleAxis
+
+	local steering = (if keyRight then 1 else 0) - (if keyLeft then 1 else 0)
 	if math.abs(padSteer) > math.abs(steering) then
 		steering = padSteer
+	end
+	if math.abs(touchSteerAxis) > math.abs(steering) then
+		steering = touchSteerAxis
 	end
 
 	local clampedSteer = math.clamp(steering, -1, 1)
@@ -715,32 +763,128 @@ local function sendDriveInput(forceNeutral: boolean?, forceSend: boolean?)
 end
 
 local function buildTouchDrive(parent: Instance): Frame
-	local frame = panel(parent, "Drive", UDim2.new(1, -8, 1, -8), UDim2.fromOffset(220, 188))
+	--[[
+		One-thumb stick (X steer, Y throttle) + a large brake. Replaces the old
+		digital GO/←/→/REV grid that felt nothing like driving on a phone.
+	]]
+	local frame = panel(parent, "Drive", UDim2.new(1, -8, 1, -8), UDim2.fromOffset(268, 200))
 	frame.AnchorPoint = Vector2.new(1, 1)
 	frame.Visible = false
 	label(frame, "Title", UDim2.fromOffset(12, 6), UDim2.new(1, -24, 0, 18), "DRIVE", 14, Enum.Font.GothamBlack)
 
-	local hold = UIKit.bindHold
+	local stickWell = Instance.new("Frame")
+	stickWell.Name = "StickWell"
+	stickWell.BackgroundColor3 = UIKit.Theme.Track
+	stickWell.BackgroundTransparency = 0.15
+	stickWell.BorderSizePixel = 0
+	stickWell.Position = UDim2.fromOffset(12, 36)
+	stickWell.Size = UDim2.fromOffset(148, 148)
+	stickWell.Parent = frame
+	UIKit.corner(stickWell, 74)
+	local wellStroke = Instance.new("UIStroke")
+	wellStroke.Color = UIKit.Theme.PanelEdge
+	wellStroke.Thickness = 1
+	wellStroke.Transparency = 0.55
+	wellStroke.Parent = stickWell
 
-	hold(button(frame, "Fwd", UDim2.fromOffset(74, 28), UDim2.fromOffset(72, TOUCH_MIN), "GO"), function(state)
-		touchForward = state
+	local knob = Instance.new("Frame")
+	knob.Name = "Knob"
+	knob.AnchorPoint = Vector2.new(0.5, 0.5)
+	knob.BackgroundColor3 = UIKit.Theme.Accent
+	knob.BackgroundTransparency = 0.1
+	knob.BorderSizePixel = 0
+	knob.Position = UDim2.fromScale(0.5, 0.5)
+	knob.Size = UDim2.fromOffset(52, 52)
+	knob.Parent = stickWell
+	UIKit.corner(knob, 26)
+
+	local stickHint = label(
+		frame,
+		"StickHint",
+		UDim2.fromOffset(12, 186),
+		UDim2.fromOffset(148, 12),
+		"STEER · THROTTLE",
+		9,
+		Enum.Font.GothamMedium,
+		true
+	)
+	stickHint.TextXAlignment = Enum.TextXAlignment.Center
+	stickHint.TextColor3 = UIKit.Theme.Dim
+
+	local activeTouch: InputObject? = nil
+
+	local function axisWithDeadzone(value: number): number
+		local magnitude = math.abs(value)
+		if magnitude < STICK_DEADZONE then
+			return 0
+		end
+		return math.sign(value) * (magnitude - STICK_DEADZONE) / (1 - STICK_DEADZONE)
+	end
+
+	local function resetStick()
+		activeTouch = nil
+		touchSteerAxis = 0
+		touchThrottleAxis = 0
+		knob.Position = UDim2.fromScale(0.5, 0.5)
+		sendDriveInput(false, true)
+	end
+
+	local function applyStick(screenPos: Vector2)
+		local size = stickWell.AbsoluteSize
+		if size.X < 1 or size.Y < 1 then
+			return
+		end
+		local center = stickWell.AbsolutePosition + size * 0.5
+		local delta = screenPos - center
+		local maxRadius = math.max(8, size.X * 0.5 - 26)
+		local magnitude = delta.Magnitude
+		if magnitude > maxRadius and magnitude > 0 then
+			delta = delta.Unit * maxRadius
+		end
+		knob.Position = UDim2.fromOffset(size.X * 0.5 + delta.X, size.Y * 0.5 + delta.Y)
+
+		local nx = delta.X / maxRadius
+		local ny = -delta.Y / maxRadius
+		touchSteerAxis = axisWithDeadzone(nx)
+		touchThrottleAxis = axisWithDeadzone(ny)
 		sendDriveInput()
+	end
+
+	stickWell.InputBegan:Connect(function(input: InputObject)
+		if
+			input.UserInputType ~= Enum.UserInputType.Touch
+			and input.UserInputType ~= Enum.UserInputType.MouseButton1
+		then
+			return
+		end
+		activeTouch = input
+		applyStick(Vector2.new(input.Position.X, input.Position.Y))
 	end)
-	hold(button(frame, "Left", UDim2.fromOffset(8, 78), UDim2.fromOffset(72, TOUCH_MIN), "<"), function(state)
-		touchLeft = state
-		sendDriveInput()
+
+	UserInputService.InputChanged:Connect(function(input: InputObject)
+		if input ~= activeTouch then
+			return
+		end
+		if
+			input.UserInputType ~= Enum.UserInputType.Touch
+			and input.UserInputType ~= Enum.UserInputType.MouseMovement
+		then
+			return
+		end
+		applyStick(Vector2.new(input.Position.X, input.Position.Y))
 	end)
-	hold(button(frame, "Right", UDim2.fromOffset(140, 78), UDim2.fromOffset(72, TOUCH_MIN), ">"), function(state)
-		touchRight = state
-		sendDriveInput()
+
+	UserInputService.InputEnded:Connect(function(input: InputObject)
+		if input == activeTouch then
+			resetStick()
+		end
 	end)
-	hold(button(frame, "Rev", UDim2.fromOffset(8, 130), UDim2.fromOffset(72, TOUCH_MIN), "REV"), function(state)
-		touchReverse = state
-		sendDriveInput()
-	end)
-	hold(button(frame, "Brake", UDim2.fromOffset(74, 78), UDim2.fromOffset(72, 96), "BRAKE"), function(state)
+
+	local brake = button(frame, "Brake", UDim2.fromOffset(172, 48), UDim2.fromOffset(84, 136), "BRAKE")
+	brake.BackgroundColor3 = UIKit.Theme.Danger
+	UIKit.bindHold(brake, function(state: boolean)
 		touchBrake = state
-		sendDriveInput()
+		sendDriveInput(false, true)
 	end)
 
 	return frame
@@ -977,6 +1121,17 @@ local function build()
 	hintLabel.TextColor3 = UIKit.Theme.Muted
 	hintLabel.TextWrapped = true
 
+	--[[
+		Today's objective, on the prep screen and nowhere else. This is the one
+		moment it can change how somebody drives; during a run it would be a line
+		of text competing with the load, and on the result screen the payout says
+		it better than the brief would.
+	]]
+	dailyLabel =
+		label(brief, "Daily", UDim2.fromOffset(14, 100), UDim2.new(1, -28, 0, 18), "", 11, Enum.Font.GothamBold, true)
+	dailyLabel.TextXAlignment = Enum.TextXAlignment.Center
+	dailyLabel.Visible = false
+
 	local toastPanel = panel(root, "Toast", UDim2.new(0.5, 0, 0, 112), UDim2.new(0.62, 0, 0, 36))
 	toastPanel.AnchorPoint = Vector2.new(0.5, 0)
 	toastPanel.BackgroundTransparency = 0.12
@@ -1197,6 +1352,16 @@ local function resultBody(snap: LabTypes.LabSnapshot): string
 		table.insert(lines, string.format("+%d CARGO CASH · BALANCE %d", snap.rewardEarned, snap.credits))
 	end
 
+	-- The daily gets its own line rather than being folded into the payout. It
+	-- is the reason to come back tomorrow, so it should be legible as a separate
+	-- thing that happened rather than as a bigger number.
+	if snap.dailyEarned > 0 then
+		table.insert(
+			lines,
+			string.upper(string.format("DAILY COMPLETE · %s · +%d", snap.dailyLabel, snap.dailyEarned))
+		)
+	end
+
 	--[[
 		Records, named while the run that beat them is still on screen. Only the
 		first is shown: a run that beats three at once is usually the first
@@ -1265,14 +1430,14 @@ local function hintFor(role: string?, device: string, solo: boolean?, offTruck: 
 			if device == "Gamepad" then
 				return "Drive with triggers and stick. Hold A to work the weakest strap."
 			elseif device == "Touch" then
-				return "Drive pad to move. Hold WORK to tighten the weakest strap."
+				return "Stick to drive, BRAKE to stop. Hold WORK to tighten the weakest strap."
 			end
 			return "W/S drive, A/D steer, Space brake. Hold E to work the weakest strap."
 		end
 		if device == "Gamepad" then
 			return "Right trigger drive, left stick steer, X brake. Slow down before the corner."
 		elseif device == "Touch" then
-			return "Use the drive pad. Slow down before you can see round the corner."
+			return "Stick steers and throttles; BRAKE stops. Slow down before the corner."
 		end
 		return "W/S drive, A/D steer, Space brake. Slow down before you can see round the corner."
 	elseif role == "Strapper" then
@@ -1368,10 +1533,19 @@ refresh = function()
 	if isPrep then
 		local seconds = snap.restartSeconds
 		UIKit.setText(countdownLabel, if seconds > 0 then tostring(seconds) else "GO!")
-		UIKit.setSize(briefFrame, UDim2.new(0.72, 0, 0, 104))
+		UIKit.setSize(briefFrame, UDim2.new(0.72, 0, 0, 126))
 		UIKit.set(objectiveLabel, "Position", UDim2.fromOffset(14, 58))
 		UIKit.set(hintLabel, "Position", UDim2.fromOffset(14, 80))
+		UIKit.setVisible(dailyLabel, true)
+		UIKit.setText(
+			dailyLabel,
+			if snap.dailyClaimed
+				then string.upper("DAILY DONE - " .. snap.dailyLabel)
+				else string.upper(string.format("DAILY: %s  +%d", snap.dailyLabel, snap.dailyBonus))
+		)
+		UIKit.setTextColor(dailyLabel, if snap.dailyClaimed then UIKit.Theme.Muted else UIKit.Theme.Accent)
 	else
+		UIKit.setVisible(dailyLabel, false)
 		UIKit.setSize(briefFrame, UDim2.new(0.72, 0, 0, 78))
 		UIKit.set(objectiveLabel, "Position", UDim2.fromOffset(14, 28))
 		UIKit.set(hintLabel, "Position", UDim2.fromOffset(14, 52))
@@ -1594,14 +1768,16 @@ refresh = function()
 		end
 	end
 
+	local workChrome, switchChrome, restartChrome = controlChromeLabels(inputDevice)
 	setButtonLive(
 		switchButton,
 		(isPrep or isRun) and not spectating and not swapWarning and not swapActive,
 		UIKit.Theme.Button
 	)
-	UIKit.setText(switchButton, if pendingRoleAt > 0 then "SWITCHING…" else "T · ROLE")
+	UIKit.setText(switchButton, if pendingRoleAt > 0 then "SWITCHING…" else switchChrome)
 	-- Spectators may still clear a halted sim; otherwise a role-wipe soft-locks R.
 	setButtonLive(restartButton, (not spectating) or snap.simHalted == true, UIKit.Theme.Danger)
+	UIKit.setText(restartButton, restartChrome)
 
 	UIKit.setVisible(workButton, (isPrep or isRun) and (isStrapper or (snap.myRole == "Driver" and snap.solo)))
 	setButtonLive(workButton, canWork, UIKit.Theme.Positive)
@@ -1617,9 +1793,8 @@ refresh = function()
 			elseif working and snap.myStation then "WORKING · " .. snap.myStation
 			elseif working and snap.myRole == "Driver" and snap.solo then "WORKING · STRAP"
 			elseif shownStationTarget then "→ " .. shownStationTarget
-			elseif snap.myStation then "E · " .. snap.myStation
-			elseif snap.myRole == "Driver" and snap.solo then "E · STRAP"
-			else "NO STATION"
+			elseif canWork then workIdleLabel(snap, inputDevice)
+			else workChrome
 	)
 
 	setDimOverlay(stationRowFrame, isResult, "Run finished")
@@ -1736,7 +1911,7 @@ refresh = function()
 		resultDetail,
 		if compactContract then UDim2.new(1, -24, 0, COMPACT_RESULT.DetailHeight) else UDim2.new(1, -32, 0, 88)
 	)
-	UIKit.set(resultDetail, "TextSize", if compactContract then 11 else 15)
+	UIKit.set(resultDetail, "TextSize", if compactContract then 13 else 15)
 	UIKit.set(
 		resultQuestion,
 		"Position",
@@ -2072,6 +2247,24 @@ local function bindInputs()
 				local showPad = latest.phase == "Run" and DeviceInput.wantsTouchDrive()
 				UIKit.setVisible(driveFrame, showPad)
 			end
+			-- Refresh chrome verbs immediately so Touch does not keep "HOLD E".
+			if workButton and switchButton and restartButton then
+				local workChrome, switchChrome, restartChrome = controlChromeLabels(inputDevice)
+				if pendingRoleAt <= 0 then
+					UIKit.setText(switchButton, switchChrome)
+				end
+				UIKit.setText(restartButton, restartChrome)
+				local snap = latest
+				local canWorkNow = snap.phase == "Run"
+					and not snap.swapActive
+					and (snap.myRole == "Strapper" or (snap.myRole == "Driver" and snap.solo))
+					and not (snap.myOffTruck or snap.myThrown)
+				if canWorkNow and not working then
+					UIKit.setText(workButton, workIdleLabel(snap, inputDevice))
+				elseif not canWorkNow and snap.phase ~= "Result" then
+					UIKit.setText(workButton, workChrome)
+				end
+			end
 		end
 	end)
 	DeviceInput.onPreferredInputChanged(function()
@@ -2127,7 +2320,6 @@ local lastReplicatedPos: Vector3? = nil
 local smoothedCameraPos: Vector3? = nil
 local smoothedCameraFocus: Vector3? = nil
 local smoothedCameraForward: Vector3? = nil
-local lastMotionPosition: Vector3? = nil
 local lastMotionTime = 0
 local cameraShakeIntensity = 0
 local cameraImpactKick = 0
@@ -2160,7 +2352,6 @@ local function bindCamera()
 				smoothedCameraPos = nil
 				smoothedCameraFocus = nil
 				smoothedCameraForward = nil
-				lastMotionPosition = nil
 				cameraShakeIntensity = 0
 				cameraImpactKick = 0
 			end
@@ -2171,9 +2362,10 @@ local function bindCamera()
 		chassisMissingFor = 0
 		camera.CameraType = Enum.CameraType.Scriptable
 
-		-- Position, velocity and heading must come from one timestamped sample.
-		-- Mixing Roblox replication position with LabMotion velocity was the
-		-- packet-rate camera bump that this resolver removes.
+		-- Anchor the camera to the same interpolated transform Roblox renders for
+		-- the truck. LabMotion is deliberately limited to feedback signals; using
+		-- its extrapolated position here makes the visible truck skip against the
+		-- camera whenever the two interpolation timelines disagree.
 		local motion = if latest and latest.phase ~= "Result"
 			then LabMotionState.resolve(
 				Workspace:GetServerTimeNow(),
@@ -2181,7 +2373,8 @@ local function bindCamera()
 				LabConfig.CameraMotionStaleSeconds
 			)
 			else nil
-		local replicatedPos = chassis.Position
+		local renderedFrame = chassis:GetRenderCFrame()
+		local replicatedPos = renderedFrame.Position
 		local previousReplicatedPos = lastReplicatedPos
 		local correctionDistance = if previousReplicatedPos
 			then (replicatedPos - previousReplicatedPos).Magnitude
@@ -2189,28 +2382,16 @@ local function bindCamera()
 		local teleported = previousReplicatedPos ~= nil and correctionDistance > 24
 		lastReplicatedPos = replicatedPos
 
-		local targetPosition: Vector3
-		local velocity: Vector3
-		local flat: Vector3
+		local targetPosition = replicatedPos
+		local velocity = if motion then motion.velocity else chassis.AssemblyLinearVelocity
+		local look = renderedFrame.LookVector
+		local flat = Vector3.new(look.X, 0, look.Z)
+		flat = if flat.Magnitude < 0.01 then Vector3.new(0, 0, 1) else flat.Unit
 		local suspensionEnergy = 0
 		local gradeDeg = 0
 		if motion then
-			targetPosition = motion.position
-			velocity = motion.velocity
-			flat = motion.forward
 			suspensionEnergy = motion.suspensionEnergy
 			gradeDeg = math.deg(motion.sample.pitch)
-			local previousMotionPosition = lastMotionPosition
-			if previousMotionPosition and (targetPosition - previousMotionPosition).Magnitude > 24 then
-				teleported = true
-			end
-			lastMotionPosition = targetPosition
-		else
-			targetPosition = replicatedPos
-			velocity = chassis.AssemblyLinearVelocity
-			local look = chassis.CFrame.LookVector
-			flat = Vector3.new(look.X, 0, look.Z)
-			flat = if flat.Magnitude < 0.01 then Vector3.new(0, 0, 1) else flat.Unit
 		end
 
 		local targetFocus = targetPosition + Vector3.new(0, 3, 0)

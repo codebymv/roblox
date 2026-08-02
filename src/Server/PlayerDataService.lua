@@ -59,7 +59,7 @@ local function defaultProfile(): Types.ProfileData
 		unlockedPaints = {},
 		equippedPaint = "Factory",
 		manifestJournal = {},
-		lastDailyDay = 0,
+		dailyContractDay = 0,
 		grantedReceipts = {},
 		labRecords = {
 			deliveries = 0,

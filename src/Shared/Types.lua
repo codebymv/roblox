@@ -30,7 +30,10 @@ export type ProfileData = {
 	unlockedPaints: { [string]: boolean },
 	equippedPaint: string,
 	manifestJournal: { [string]: number },
-	lastDailyDay: number,
+	-- Day number of the last banked daily bonus. A day rather than a flag, so it
+	-- expires without anything having to reset it. Was lastDailyDay, which
+	-- belonged to the depot build's daily credit and outlived its only reader.
+	dailyContractDay: number,
 	-- Purchase ids already granted, oldest first. ProcessReceipt can fire more
 	-- than once for the same sale, so this is what makes a grant idempotent.
 	-- Bounded by Commerce.MaxReceiptHistory.

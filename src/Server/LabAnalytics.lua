@@ -306,6 +306,17 @@ function LabAnalytics:invitePrompted(player: Player, crewSize: number, phase: st
 	})
 end
 
+--[[
+	A completed daily. The objective id is the breakdown that matters: a rotation
+	entry nobody ever completes is either unreadable or badly priced, and the
+	only way to tell them apart is to see how often it is attempted versus met.
+]]
+function LabAnalytics:dailyCompleted(player: Player, objective)
+	self:_custom(player, "CargoDailyCompleted", math.max(0, objective.bonus), {
+		[Enum.AnalyticsCustomFieldKeys.CustomField01.Name] = "Daily - " .. objective.id,
+	})
+end
+
 function LabAnalytics:shouldAskForFeedback(player: Player): boolean
 	local state = self.players[player.UserId]
 	return state ~= nil and state.runsFinished >= 1 and state.feedback == nil

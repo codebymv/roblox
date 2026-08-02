@@ -84,16 +84,16 @@ local function compressionFor(id: string): number
 	return math.clamp(motion.cRR, 0, 1)
 end
 
-local function targetWheelLocal(body: BasePart, id: string, steerAngle: number): (Vector3, Vector3)
+local function targetWheelLocal(bodyFrame: CFrame, id: string, steerAngle: number): (Vector3, Vector3)
 	local offset = LabConfig.WheelOffsets[id]
 	local steer = id == "FL" or id == "FR"
 	local compression = compressionFor(id)
 	local travel = LabConfig.SuspensionRestLength * (1 - compression) - LabConfig.WheelRadius
 	local steerRotation = if steer then CFrame.Angles(0, steerAngle, 0) else CFrame.identity
-	local mountCF = body.CFrame * CFrame.new(offset) * steerRotation
+	local mountCF = bodyFrame * CFrame.new(offset) * steerRotation
 	local center = mountCF.Position - mountCF.UpVector * math.max(0, travel)
 	local localFrame =
-		body.CFrame:ToObjectSpace(CFrame.fromMatrix(center, mountCF.RightVector, mountCF.UpVector, -mountCF.LookVector))
+		bodyFrame:ToObjectSpace(CFrame.fromMatrix(center, mountCF.RightVector, mountCF.UpVector, -mountCF.LookVector))
 	return localFrame.Position, localFrame.RightVector
 end
 
@@ -141,8 +141,9 @@ function WheelPresentation.mount()
 
 		local motion = LabMotionState.get()
 		local steerAngle = if motion then motion.steer else 0
+		local bodyFrame = body:GetRenderCFrame()
 		smoothedForwardSpeed = if motion
-			then motion.vx * body.CFrame.LookVector.X + motion.vz * body.CFrame.LookVector.Z
+			then motion.vx * bodyFrame.LookVector.X + motion.vz * bodyFrame.LookVector.Z
 			else 0
 
 		for _, id in WHEEL_IDS do
@@ -152,7 +153,7 @@ function WheelPresentation.mount()
 			end
 			local sourceHub = source:FindFirstChild("Hub")
 			local hubPart = if sourceHub and sourceHub:IsA("BasePart") then sourceHub else nil
-			local localPosition, localAxle = targetWheelLocal(body, id, steerAngle)
+			local localPosition, localAxle = targetWheelLocal(bodyFrame, id, steerAngle)
 
 			source.LocalTransparencyModifier = 1
 			if hubPart then
@@ -228,7 +229,11 @@ function WheelPresentation.mount()
 
 		local motion = LabMotionState.get()
 		local steerAngle = if motion then motion.steer else 0
-		local look = body.CFrame.LookVector
+		-- Visual wheels must share the chassis' rendered timeline. Using body.CFrame
+		-- here causes the clones to advance in packet-sized steps against Roblox's
+		-- interpolated chassis even when the underlying physics is smooth.
+		local bodyFrame = body:GetRenderCFrame()
+		local look = bodyFrame.LookVector
 		local targetForwardSpeed = if motion then motion.vx * look.X + motion.vy * look.Y + motion.vz * look.Z else 0
 		local speedAlpha = 1 - math.exp(-SPEED_RATE * dt)
 		smoothedForwardSpeed += (targetForwardSpeed - smoothedForwardSpeed) * speedAlpha
@@ -242,7 +247,7 @@ function WheelPresentation.mount()
 				continue
 			end
 
-			local targetPos, targetAxle = targetWheelLocal(body, id, steerAngle)
+			local targetPos, targetAxle = targetWheelLocal(bodyFrame, id, steerAngle)
 			if (targetPos - visual.localPosition).Magnitude > 4 then
 				visual.localPosition = targetPos
 			else
@@ -264,7 +269,7 @@ function WheelPresentation.mount()
 
 			local localFrame = CFrame.fromMatrix(visual.localPosition, visual.localAxle, localUp, -longitudinal)
 				* CFrame.Angles(visual.spin, 0, 0)
-			local worldFrame = body.CFrame * localFrame
+			local worldFrame = bodyFrame * localFrame
 			visual.wheel.CFrame = worldFrame
 			if visual.hub then
 				visual.hub.CFrame = worldFrame

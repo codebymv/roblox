@@ -30,10 +30,12 @@ local LabRemotes = require(Shared:WaitForChild("LabRemotes"))
 local LabTypes = require(Shared:WaitForChild("LabTypes"))
 local Net = require(Shared:WaitForChild("Net"))
 local RunCauses = require(Shared:WaitForChild("RunCauses"))
+local DailyContract = require(Shared:WaitForChild("DailyContract"))
 local RunVariants = require(Shared:WaitForChild("RunVariants"))
 
 local CargoLoad = require(script.Parent.CargoLoad)
 local AchievementService = require(script.Parent.AchievementService)
+local DailyProgressionService = require(script.Parent.DailyProgressionService)
 local CommerceService = require(script.Parent.CommerceService)
 local LabAnalytics = require(script.Parent.LabAnalytics)
 local LabProgressionService = require(script.Parent.LabProgressionService)
@@ -105,6 +107,8 @@ function LabSession.new(config: Config)
 		lastRewards = {},
 		-- Record keys each player beat on the last finished run, by UserId.
 		recordsBeaten = {},
+		-- Daily bonus banked on the last finished run, by UserId.
+		dailyEarned = {},
 
 		-- Coalesced client flush targets 60 Hz on changed axes; burst covers edges.
 		driveLimiter = RateLimiter.new(45, 60),
@@ -364,6 +368,8 @@ function LabSession:_buildSharedSnapshot()
 			end
 		end
 	end
+	local today = DailyContract.dayFromUnix(os.time())
+	local dailyObjective = DailyContract.forDay(today)
 	local crewCount = self:_activeCrewCount()
 	local solo = crewCount <= 1
 	local runVariant = self.runVariant
@@ -426,6 +432,11 @@ function LabSession:_buildSharedSnapshot()
 		myContractVote = nil,
 		records = nil,
 		recordsBeaten = nil,
+		dailyLabel = dailyObjective.label,
+		dailyBrief = dailyObjective.brief,
+		dailyBonus = dailyObjective.bonus,
+		dailyClaimed = false,
+		dailyEarned = 0,
 		progressionReady = false,
 		progressionSaving = false,
 		credits = 0,
@@ -485,6 +496,8 @@ function LabSession:_applyPersonalFields(snapshot, player: Player)
 	-- a run they are not going to be on.
 	snapshot.myContractVote = if role ~= nil then self.contractVotes[player.UserId] else nil
 	snapshot.records = AchievementService.records(player)
+	snapshot.dailyClaimed = DailyProgressionService.isClaimed(player, DailyContract.dayFromUnix(os.time()))
+	snapshot.dailyEarned = self.dailyEarned[player.UserId] or 0
 	snapshot.recordsBeaten = if self.phase == "Result" then self.recordsBeaten[player.UserId] else nil
 	local progression = LabProgressionService.snapshot(player)
 	snapshot.progressionReady = progression.ready
@@ -1095,18 +1108,46 @@ function LabSession:_finishRun(outcome: string, saved: boolean, crew: { Player }
 		it is still on the truck.
 	]]
 	table.clear(self.recordsBeaten)
+	table.clear(self.dailyEarned)
 	local riskyContract = self.contractChoice == RunVariants.Choice.Risky
+
+	--[[
+		The facts every per-player consumer asks about, gathered once. Both
+		records and the daily read the same run, and letting them each reach into
+		the summary separately is how the two quietly start disagreeing about
+		what happened.
+	]]
+	local facts = {
+		outcome = outcome,
+		cargoReadout = if summary then summary.cargoReadout else 0,
+		chassisIntegrity = if summary then summary.chassisIntegrity else 0,
+		strapBreaks = if summary then summary.strapBreaks else 0,
+		strapRefits = if summary then summary.strapRefits else 0,
+		throws = if summary then summary.throws else 0,
+		durationSeconds = if summary then summary.duration else 0,
+		riskyContract = riskyContract,
+	}
+
+	local today = DailyContract.dayFromUnix(os.time())
+	local objective = DailyContract.forDay(today)
+	local dailyMet = DailyContract.isMet(objective, facts)
+
 	for _, player in crew do
 		local beaten = AchievementService.applyRun(player, {
 			outcome = outcome,
-			conditionPct = if summary then summary.cargoReadout else 0,
-			durationSeconds = if summary then summary.duration else 0,
+			conditionPct = facts.cargoReadout,
+			durationSeconds = facts.durationSeconds,
 			payout = self.lastRewards[player.UserId] or 0,
-			strapBreaks = if summary then summary.strapBreaks else 0,
+			strapBreaks = facts.strapBreaks,
 			riskyContract = riskyContract,
 		})
 		if #beaten > 0 then
 			self.recordsBeaten[player.UserId] = beaten
+		end
+
+		if dailyMet and DailyProgressionService.claim(player, today, objective) then
+			self.dailyEarned[player.UserId] = objective.bonus
+			self.analytics:dailyCompleted(player, objective)
 		end
 	end
 end
