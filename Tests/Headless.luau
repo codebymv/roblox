@@ -197,6 +197,44 @@ check("ducking only ever lowers a bus", function()
 	assert(AudioMix.DuckDepth.SfxEvents == 0, "Events must not duck themselves")
 end)
 
+--[[
+	Compressor settings that pump rather than make room. A release shorter than
+	the attack is the classic one: the layer underneath snaps back before the
+	transient has finished, which is audible as the mix breathing.
+]]
+check("sidechain compressors make room instead of pumping", function()
+	local compressed = 0
+	for name, settings in AudioMix.Compressor do
+		compressed += 1
+		assert(AudioMix.Bus[name], "Compressor configured for a bus that does not exist: " .. name)
+		assert(name ~= AudioMix.SideChainBus, name .. " is sidechained to itself")
+		assert(settings.ratio > 1, name .. " has a ratio that does not compress")
+		assert(settings.thresholdDb < 0, name .. " has a threshold at or above unity")
+		assert(settings.attackSeconds > 0, name .. " has an instantaneous attack")
+		assert(
+			settings.releaseSeconds > settings.attackSeconds,
+			name .. " releases faster than it attacks, which pumps"
+		)
+	end
+	assert(compressed > 0, "Nothing is sidechained, so nothing cuts through")
+	assert(AudioMix.Bus[AudioMix.SideChainBus], "The sidechain source is not a real bus")
+	assert(
+		AudioMix.Compressor[AudioMix.SideChainBus] == nil,
+		"The event bus compresses itself and would squash its own transients"
+	)
+
+	-- Music is the layer with least to say during a crisis, so it gives way
+	-- hardest under both mechanisms.
+	assert(
+		AudioMix.Compressor.Music.ratio > AudioMix.Compressor.SfxBed.ratio,
+		"The bed gives way harder than the music"
+	)
+	assert(
+		AudioMix.Compressor.Music.thresholdDb < AudioMix.Compressor.SfxBed.thresholdDb,
+		"Music starts compressing later than the bed"
+	)
+end)
+
 check("music steps back for the run it is scoring", function()
 	assert(
 		AudioMix.musicPhaseVolume("Run") < AudioMix.musicPhaseVolume("Staging"),

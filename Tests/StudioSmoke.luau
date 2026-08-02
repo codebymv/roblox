@@ -152,6 +152,7 @@ local function checkFunTest()
 
 	local chassis = truck:FindFirstChild("Chassis")
 	assert(chassis and chassis:IsA("BasePart"), "Chassis missing")
+	assert(chassis:FindFirstChild("BodyForce"), "Chassis body force missing")
 	assert(chassis.Anchored == (session.phase ~= "Run"), "Truck must be parked outside Run and physical during Run")
 	assert(chassis.CanCollide, "Chassis must collide with the road")
 	for _, detailName in { "FrontBumper", "Grille", "RoofVisor", "ExhaustStackL", "ExhaustStackR", "RearBumper" } do
@@ -180,11 +181,14 @@ local function checkFunTest()
 			assert(wheel.CFrame.UpVector:Dot(chassis.CFrame.UpVector) > 0.99, "Wheel " .. id .. " has a flipped basis")
 		end
 		assert(chassis:FindFirstChild("Strap_" .. id), "Missing strap anchor " .. id)
+		assert(chassis:FindFirstChild("Force_" .. id), "Missing wheel force attachment " .. id)
+		assert(chassis:FindFirstChild("WheelForce_" .. id), "Missing wheel force actuator " .. id)
 	end
-	assert(session.chassisRig:hasCompleteWheelSet(), "Truck is missing a wheel or hub authority")
+	assert(session.chassisRig:hasCompleteWheelSet(), "Truck is missing wheel geometry or force authority")
 
-	local crate = lab:FindFirstChild("Crate")
+	local crate = truck:FindFirstChild("Crate")
 	assert(crate and crate:IsA("BasePart"), "Crate missing")
+	assert(crate:FindFirstChild("Drag"), "Cargo drag actuator missing")
 	assert(crate.Anchored == (session.phase ~= "Run"), "Cargo freeze state must match the truck")
 	local cargo = session.runVariant.cargo
 	local expectedSize = Vector3.new(
@@ -193,7 +197,7 @@ local function checkFunTest()
 		LabConfig.CrateSize.Z * cargo.scaleZ
 	)
 	assert((crate.Size - expectedSize).Magnitude < 0.05, "Crate geometry does not match the selected cargo")
-	local cargoDetails = lab:FindFirstChild("CargoDetails")
+	local cargoDetails = truck:FindFirstChild("CargoDetails")
 	assert(cargoDetails and cargoDetails:IsA("Model"), "Selected cargo has no visual identity model")
 	assert(cargoDetails:FindFirstChild("CargoPlacard"), "Selected cargo has no readable placard")
 

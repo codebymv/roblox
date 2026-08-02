@@ -860,6 +860,9 @@ function CargoLoad:hasCompleteLoad(): boolean
 	if not self.crate or not self.crate.Parent then
 		return false
 	end
+	if not self.dragForce or not self.dragForce.Parent then
+		return false
+	end
 	if not self.pallet or not self.pallet.Parent then
 		return false
 	end

@@ -34,17 +34,21 @@ UIKit.MinScale = 0.55
 UIKit.MaxScale = 1.2
 
 UIKit.Theme = {
-	Panel = Color3.fromRGB(16, 18, 22),
-	PanelTransparency = 0.25,
-	PanelCorner = 8,
+	Panel = Color3.fromRGB(15, 18, 23),
+	PanelTop = Color3.fromRGB(27, 33, 41),
+	PanelEdge = Color3.fromRGB(104, 120, 138),
+	PanelTransparency = 0.12,
+	PanelCorner = 10,
 
 	Text = Color3.fromRGB(235, 235, 235),
 	Muted = Color3.fromRGB(170, 178, 190),
 	Dim = Color3.fromRGB(140, 148, 160),
 	Accent = Color3.fromRGB(255, 210, 110),
 
-	Button = Color3.fromRGB(48, 54, 64),
-	ButtonCorner = 6,
+	Button = Color3.fromRGB(46, 54, 65),
+	ButtonEdge = Color3.fromRGB(128, 142, 158),
+	ButtonCorner = 8,
+	Track = Color3.fromRGB(31, 37, 45),
 	Positive = Color3.fromRGB(60, 110, 70),
 	Danger = Color3.fromRGB(96, 54, 54),
 
@@ -258,6 +262,20 @@ function UIKit.panel(props: { [string]: any }?): Frame
 	frame.ClipsDescendants = true
 	apply(frame, props)
 	UIKit.corner(frame, props and props.CornerRadius or Theme.PanelCorner)
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Name = "PanelEdge"
+	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	stroke.Color = Theme.PanelEdge
+	stroke.Thickness = 1
+	stroke.Transparency = 0.55
+	stroke.Parent = frame
+
+	local gradient = Instance.new("UIGradient")
+	gradient.Name = "PanelShade"
+	gradient.Color = ColorSequence.new(Theme.PanelTop, Theme.Panel)
+	gradient.Rotation = 90
+	gradient.Parent = frame
 	return frame
 end
 
@@ -287,6 +305,13 @@ function UIKit.button(props: { [string]: any }?): TextButton
 	element.ClipsDescendants = true
 	apply(element, props)
 	UIKit.corner(element, props and props.CornerRadius or Theme.ButtonCorner)
+	local stroke = Instance.new("UIStroke")
+	stroke.Name = "ButtonEdge"
+	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	stroke.Color = Theme.ButtonEdge
+	stroke.Thickness = 1
+	stroke.Transparency = 0.68
+	stroke.Parent = element
 	UIKit.fitText(element, props and props.MaxTextSize or 15, 9)
 	return element
 end

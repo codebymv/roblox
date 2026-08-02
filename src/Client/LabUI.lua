@@ -28,6 +28,7 @@ local TruckPaints = require(Shared:WaitForChild("TruckPaints"))
 local RunCauses = require(Shared:WaitForChild("RunCauses"))
 
 local DeviceInput = require(script.Parent.DeviceInput)
+local LabMotionState = require(script.Parent.LabMotionState)
 local UIKit = require(script.Parent.UIKit)
 
 local LabUI = {}
@@ -81,7 +82,7 @@ local TOAST_HOLD = 3.2
 local PRESENTATION_RATE = 14
 local PRESENTATION_INTERVAL = 1 / 30
 local PENDING_ACTION_TIMEOUT = 2
-local STRAP_PANEL_HEIGHT = 176
+local STRAP_PANEL_HEIGHT = 194
 local GARAGE_TOP = STRAP_PANEL_HEIGHT + 8
 
 local keyForward, keyReverse, keyLeft, keyRight, keyBrake = false, false, false, false, false
@@ -96,11 +97,11 @@ local toastShowing = false
 local safeRoot: Frame? = nil
 local lastOffTruckToastAt = 0
 local chassisMissingFor = 0
-local lastChassisPos: Vector3? = nil
 local lastSentDrive = { throttle = 0, steering = 0, braking = false }
 local lastDriveSendAt = 0
-local DRIVE_FLUSH_SECONDS = 0.05
+local DRIVE_FLUSH_SECONDS = 1 / 60
 local DRIVE_KEEPALIVE_SECONDS = 0.5
+local STEER_QUANTIZE = 0.01
 local presented = nil
 local pendingStation: string? = nil
 local pendingStationAt = 0
@@ -192,6 +193,7 @@ local contractCards: { [string]: ContractCardUI } = {}
 local resultQuestion, resultConstraint, feedbackRow
 local phaseBadge, countdownLabel
 local statusFrame, briefFrame, strapPanelFrame, controlsFrame, driveFrame, garageFrame
+local statusAccent, speedCaption, routeTrack, routeFill, routeLabel, roleLabel
 local garagePaintName, garageHint, garageRecords, garagePrevious, garageAction, garageNext
 local controlsTitle, stationRowFrame, actionRowFrame, runLockLabel
 local strapRows: { [string]: any } = {}
@@ -438,9 +440,20 @@ local function buildStrapPanel(parent: Instance): Frame
 	frame.AnchorPoint = Vector2.new(1, 0)
 
 	label(frame, "Title", UDim2.fromOffset(12, 8), UDim2.new(1, -24, 0, 20), "STRAPS", 15, Enum.Font.GothamBlack)
+	local legend = label(
+		frame,
+		"Legend",
+		UDim2.fromOffset(44, 25),
+		UDim2.new(1, -104, 0, 14),
+		"HEALTH                         STATE",
+		9,
+		Enum.Font.GothamBold,
+		true
+	)
+	legend.TextColor3 = UIKit.Theme.Dim
 
 	for index, id in LabConfig.StrapOrder do
-		local y = 34 + (index - 1) * 34
+		local y = 42 + (index - 1) * 34
 
 		local row = UIKit.frame({
 			Name = id,
@@ -457,9 +470,10 @@ local function buildStrapPanel(parent: Instance): Frame
 			Name = "Track",
 			Position = UDim2.fromOffset(32, 8),
 			Size = UDim2.new(1, -92, 0, 12),
-			BackgroundColor3 = Color3.fromRGB(40, 44, 52),
+			BackgroundColor3 = UIKit.Theme.Track,
 			Parent = row,
 		})
+		UIKit.corner(track, 6)
 
 		local fill = UIKit.frame({
 			Name = "Fill",
@@ -467,6 +481,7 @@ local function buildStrapPanel(parent: Instance): Frame
 			BackgroundColor3 = UIKit.Theme.Good,
 			Parent = track,
 		})
+		UIKit.corner(fill, 6)
 
 		local tension = UIKit.frame({
 			Name = "Tension",
@@ -481,8 +496,8 @@ local function buildStrapPanel(parent: Instance): Frame
 		local status = label(
 			row,
 			"Status",
-			UDim2.new(1, -52, 0, 0),
-			UDim2.fromOffset(52, 28),
+			UDim2.new(1, -58, 0, 0),
+			UDim2.fromOffset(58, 28),
 			"",
 			11,
 			Enum.Font.GothamMedium,
@@ -539,8 +554,27 @@ local function buildControls(parent: Instance): Frame
 	controlsConstraint.MaxSize = Vector2.new(420, 180)
 	controlsConstraint.Parent = frame
 
-	controlsTitle =
-		label(frame, "Title", UDim2.fromOffset(12, 8), UDim2.new(1, -24, 0, 18), "STATIONS", 14, Enum.Font.GothamBlack)
+	controlsTitle = label(
+		frame,
+		"Title",
+		UDim2.fromOffset(12, 8),
+		UDim2.new(0.58, -12, 0, 18),
+		"STATIONS",
+		14,
+		Enum.Font.GothamBlack
+	)
+	roleLabel = label(
+		frame,
+		"Role",
+		UDim2.new(0.58, 0, 0, 8),
+		UDim2.new(0.42, -12, 0, 18),
+		"YOU · CREW",
+		11,
+		Enum.Font.GothamBold,
+		true
+	)
+	roleLabel.TextXAlignment = Enum.TextXAlignment.Right
+	roleLabel.TextColor3 = UIKit.Theme.Accent
 
 	stationRowFrame = UIKit.horizontalRow(frame, "StationRow", TOUCH_MIN)
 	stationRowFrame.Position = UDim2.fromOffset(0, 30)
@@ -638,16 +672,19 @@ local function currentDriveInput()
 		steering = padSteer
 	end
 
+	local clampedSteer = math.clamp(steering, -1, 1)
+	-- Quantize so stick micro-noise does not burn the LabDrive token bucket.
+	clampedSteer = math.floor(clampedSteer / STEER_QUANTIZE + 0.5) * STEER_QUANTIZE
 	return {
 		throttle = math.clamp(throttle, -1, 1),
-		steering = math.clamp(steering, -1, 1),
+		steering = clampedSteer,
 		braking = keyBrake or touchBrake or padBrake,
 	}
 end
 
 --[[
 	Gamepad stick Change can exceed the server LabDrive bucket. CAS/touch/keys
-	update local axes; Heartbeat flushes. Discrete Begin/End edges send
+	update local axes; Heartbeat flushes at 60 Hz. Discrete Begin/End edges send
 	immediately. Identical payloads are skipped except a keepalive so `at`
 	stays fresh on the server.
 ]]
@@ -798,15 +835,32 @@ local function build()
 
 	-- Without the numeric readout the status card is three lines tall, with
 	-- room left for the integrity warning that only appears when damaged.
-	local statusHeight = if DevConfig.ShowDebugOverlay then 164 else 116
+	local statusHeight = if DevConfig.ShowDebugOverlay then 198 else 162
 	statusFrame = panel(root, "Status", UDim2.fromOffset(8, 0), UDim2.fromOffset(300, statusHeight))
 	local status = statusFrame
+	statusAccent = UIKit.frame({
+		Name = "Accent",
+		Position = UDim2.fromOffset(0, 0),
+		Size = UDim2.fromOffset(4, statusHeight),
+		BackgroundColor3 = UIKit.Theme.Good,
+		Parent = status,
+	})
+	speedCaption = label(
+		status,
+		"SpeedCaption",
+		UDim2.fromOffset(14, 7),
+		UDim2.fromOffset(90, 14),
+		"SPEED",
+		10,
+		Enum.Font.GothamBold
+	)
+	speedCaption.TextColor3 = UIKit.Theme.Dim
 	speedLabel =
-		label(status, "Speed", UDim2.fromOffset(12, 8), UDim2.new(1, -24, 0, 30), "0", 28, Enum.Font.GothamBlack)
+		label(status, "Speed", UDim2.fromOffset(14, 19), UDim2.fromOffset(100, 32), "0", 29, Enum.Font.GothamBlack)
 	conditionLabel = label(
 		status,
 		"Condition",
-		UDim2.fromOffset(12, 42),
+		UDim2.fromOffset(14, 52),
 		UDim2.new(1, -24, 0, 24),
 		"LOAD SECURE",
 		19,
@@ -814,11 +868,30 @@ local function build()
 		true
 	)
 
+	routeTrack = UIKit.frame({
+		Name = "RouteTrack",
+		Position = UDim2.fromOffset(14, 82),
+		Size = UDim2.new(1, -28, 0, 8),
+		BackgroundColor3 = UIKit.Theme.Track,
+		Parent = status,
+	})
+	UIKit.corner(routeTrack, 5)
+	routeFill = UIKit.frame({
+		Name = "RouteFill",
+		Size = UDim2.fromScale(0, 1),
+		BackgroundColor3 = UIKit.Theme.Accent,
+		Parent = routeTrack,
+	})
+	UIKit.corner(routeFill, 5)
+	routeLabel =
+		label(status, "Route", UDim2.fromOffset(14, 93), UDim2.new(1, -28, 0, 16), "ROUTE 0%", 11, Enum.Font.GothamBold)
+	routeLabel.TextColor3 = UIKit.Theme.Dim
+
 	if DevConfig.ShowDebugOverlay then
 		readoutLabel = label(
 			status,
 			"Readout",
-			UDim2.fromOffset(12, 66),
+			UDim2.fromOffset(14, 112),
 			UDim2.new(1, -24, 0, 32),
 			"",
 			12,
@@ -832,7 +905,7 @@ local function build()
 	integrityLabel = label(
 		status,
 		"Integrity",
-		UDim2.fromOffset(12, if DevConfig.ShowDebugOverlay then 86 else 66),
+		UDim2.fromOffset(14, if DevConfig.ShowDebugOverlay then 150 else 112),
 		UDim2.new(1, -24, 0, 18),
 		"",
 		14,
@@ -841,21 +914,15 @@ local function build()
 	integrityLabel.TextColor3 = UIKit.Theme.Muted
 	integrityLabel.Visible = false
 
-	timeLabel = label(
-		status,
-		"Time",
-		UDim2.fromOffset(12, if DevConfig.ShowDebugOverlay then 118 else 66),
-		UDim2.new(1, -24, 0, 18),
-		"",
-		13,
-		Enum.Font.GothamMedium
-	)
+	timeLabel =
+		label(status, "Time", UDim2.new(0.42, 0, 0, 13), UDim2.new(0.58, -14, 0, 30), "", 13, Enum.Font.GothamMedium)
+	timeLabel.TextXAlignment = Enum.TextXAlignment.Right
 	timeLabel.TextColor3 = UIKit.Theme.Dim
 
 	cashLabel = label(
 		status,
 		"Cash",
-		UDim2.fromOffset(12, if DevConfig.ShowDebugOverlay then 140 else 88),
+		UDim2.fromOffset(14, if DevConfig.ShowDebugOverlay then 176 else 138),
 		UDim2.new(1, -24, 0, 18),
 		"CARGO CASH - LOADING",
 		13,
@@ -1277,6 +1344,11 @@ refresh = function()
 	)
 
 	local badge = PHASE_BADGE[phase] or PHASE_BADGE.Staging
+	local conditionColor = CONDITION_COLOR[snap.condition] or UIKit.Theme.Text
+	UIKit.setBackground(statusAccent, if isPrep or isResult then UIKit.Theme.Dim else conditionColor)
+	UIKit.setSize(routeFill, UDim2.fromScale(math.clamp(view.routeProgress, 0, 1), 1))
+	UIKit.setText(routeLabel, string.format("ROUTE %d%%", math.floor(view.routeProgress * 100 + 0.5)))
+	UIKit.setBackground(routeFill, UIKit.Theme.Accent)
 	UIKit.setText(
 		phaseBadge,
 		if swapActive
@@ -1318,7 +1390,7 @@ refresh = function()
 		UIKit.setText(speedLabel, tostring(math.floor(view.speed + 0.5)))
 		UIKit.setTextColor(speedLabel, UIKit.Theme.Text)
 		UIKit.setText(conditionLabel, conditionLine(snap))
-		UIKit.setTextColor(conditionLabel, CONDITION_COLOR[snap.condition] or UIKit.Theme.Text)
+		UIKit.setTextColor(conditionLabel, conditionColor)
 	end
 
 	if readoutLabel then
@@ -1346,17 +1418,12 @@ refresh = function()
 		showToast("Truck taking heavy damage. Ease off the shoulder.")
 	end
 
-	local timeY = if DevConfig.ShowDebugOverlay then 118 elseif showIntegrity then 86 else 66
-	UIKit.set(timeLabel, "Position", UDim2.fromOffset(12, timeY))
 	if isPrep then
-		UIKit.setText(timeLabel, snap.difficultyLabel)
+		UIKit.setText(timeLabel, "READY")
 	elseif isResult then
-		UIKit.setText(timeLabel, string.format("Route %d%%", math.floor(view.routeProgress * 100)))
+		UIKit.setText(timeLabel, "FINISHED")
 	else
-		UIKit.setText(
-			timeLabel,
-			string.format("%ds left   route %d%%", snap.timeRemaining, math.floor(view.routeProgress * 100))
-		)
+		UIKit.setText(timeLabel, string.format("%s LEFT", formatRecordTime(snap.timeRemaining)))
 	end
 
 	setDimOverlay(statusFrame, isPrep or isResult, if isPrep then "Run stats unlock at GO" else "Run finished")
@@ -1496,6 +1563,17 @@ refresh = function()
 		UIKit.setTextColor(controlsTitle, UIKit.Theme.Muted)
 		UIKit.setVisible(runLockLabel, false)
 	end
+	UIKit.setText(
+		roleLabel,
+		if spectating
+			then "YOU · SPECTATOR"
+			elseif snap.myRole then "YOU · " .. string.upper(snap.myRole)
+			else "YOU · CREW"
+	)
+	UIKit.setTextColor(
+		roleLabel,
+		if spectating then UIKit.Theme.Muted elseif snap.myRole == "Driver" then UIKit.Theme.Good else UIKit.Theme.Accent
+	)
 
 	for id, element in stationButtons do
 		local stationLive = (isPrep or isRun) and isStrapper and not swapWarning and not swapActive
@@ -2056,12 +2134,14 @@ local CAMERA_FOLLOW_SPEED = 22
 local CAMERA_MAX_LEAD = 0.12
 local CAMERA_SNAP_DISTANCE = 90
 
-local lastReplicatedPos = Vector3.zero
+local lastReplicatedPos: Vector3? = nil
 local replicationAge = 0
-local smoothedCameraPos = Vector3.zero
+local smoothedCameraPos: Vector3? = nil
+local smoothedCameraFocus: Vector3? = nil
+local smoothedCameraForward: Vector3? = nil
 
 local function bindCamera()
-	RunService.RenderStepped:Connect(function(dt: number)
+	RunService:BindToRenderStep("CargoLabCamera", Enum.RenderPriority.Camera.Value + 1, function(dt: number)
 		local camera = Workspace.CurrentCamera
 		if not camera then
 			return
@@ -2083,6 +2163,12 @@ local function bindCamera()
 				lastOffTruckToastAt = os.clock()
 				showToast("Lost the truck view. Press R to reset.")
 			end
+			if chassisMissingFor > 0.2 then
+				lastReplicatedPos = nil
+				smoothedCameraPos = nil
+				smoothedCameraFocus = nil
+				smoothedCameraForward = nil
+			end
 			return
 		end
 
@@ -2091,56 +2177,81 @@ local function bindCamera()
 		camera.CameraType = Enum.CameraType.Scriptable
 
 		--[[
-			The chassis is server-owned, so its CFrame arrives in replication
-			steps rather than every frame. Hard-following it puts every step
-			straight into the camera; lerping toward it trails behind, which is
-			the rubber-banding an earlier version had.
-
-			Neither is right, because both treat a stale position as the truth.
-			Velocity replicates alongside position, so the position between
-			updates is predictable: extrapolate along it for the time since the
-			last change, then damp the camera toward that. The lead cancels the
-			lag instead of hiding it, and the damping absorbs the correction
-			when a fresh update disagrees with the prediction.
+			Lead from LabMotion (authoritative server velocity), not client
+			AssemblyLinearVelocity which is often sparse on a server-owned
+			assembly. Fall back to position-delta velocity until the first sample.
 		]]
-		local velocity = chassis.AssemblyLinearVelocity
-		if (chassis.Position - lastReplicatedPos).Magnitude > 1e-3 then
-			lastReplicatedPos = chassis.Position
-			replicationAge = 0
+		local motion = LabMotionState.get()
+		local replicatedPos = chassis.Position
+		local previousReplicatedPos = lastReplicatedPos
+		local correctionDistance = if previousReplicatedPos
+			then (replicatedPos - previousReplicatedPos).Magnitude
+			else 0
+		local teleported = previousReplicatedPos ~= nil and correctionDistance > 24
+
+		local velocity: Vector3
+		local flat: Vector3
+		if motion then
+			velocity = Vector3.new(motion.vx, motion.vy, motion.vz)
+			flat = Vector3.new(math.sin(motion.yaw), 0, math.cos(motion.yaw))
+			if flat.Magnitude < 0.01 then
+				flat = Vector3.new(0, 0, 1)
+			else
+				flat = flat.Unit
+			end
+			-- Fresh motion sample resets lead; otherwise extrapolate briefly.
+			local sampleAge = math.clamp(Workspace:GetServerTimeNow() - motion.t, 0, CAMERA_MAX_LEAD)
+			replicationAge = sampleAge
 		else
-			replicationAge = math.min(replicationAge + dt, CAMERA_MAX_LEAD)
+			if not previousReplicatedPos or correctionDistance > 1e-3 then
+				if previousReplicatedPos and correctionDistance > 1e-3 and replicationAge > 1e-4 then
+					velocity = (replicatedPos - previousReplicatedPos) / math.max(replicationAge, dt)
+				else
+					velocity = Vector3.zero
+				end
+				lastReplicatedPos = replicatedPos
+				replicationAge = 0
+			else
+				replicationAge = math.min(replicationAge + dt, CAMERA_MAX_LEAD)
+				velocity = Vector3.zero
+			end
+			local look = chassis.CFrame.LookVector
+			flat = Vector3.new(look.X, 0, look.Z)
+			flat = if flat.Magnitude < 0.01 then Vector3.new(0, 0, 1) else flat.Unit
+		end
+		if motion then
+			lastReplicatedPos = replicatedPos
 		end
 
-		local predicted = chassis.Position + velocity * replicationAge
-		local look = chassis.CFrame.LookVector
-		local flat = Vector3.new(look.X, 0, look.Z)
-		flat = if flat.Magnitude < 0.01 then Vector3.new(0, 0, 1) else flat.Unit
+		local predicted = replicatedPos + velocity * replicationAge
+		local targetFocus = predicted + Vector3.new(0, 3, 0)
 
-		local focus = predicted + Vector3.new(0, 3, 0)
-		local desired = focus - flat * 34 + Vector3.new(0, 14, 0)
-
-		-- Frame-rate independent damping. A big jump (respawn, warp, rebuild)
-		-- snaps rather than sweeping the camera across the map.
-		if longGap or (camera.CFrame.Position - desired).Magnitude > CAMERA_SNAP_DISTANCE then
-			smoothedCameraPos = desired
+		local needsSnap = longGap
+			or teleported
+			or not smoothedCameraPos
+			or not smoothedCameraFocus
+			or not smoothedCameraForward
+		if needsSnap then
+			smoothedCameraFocus = targetFocus
+			smoothedCameraForward = flat
+			smoothedCameraPos = targetFocus - flat * 34 + Vector3.new(0, 14, 0)
 		else
 			local alpha = 1 - math.exp(-CAMERA_FOLLOW_SPEED * dt)
-			smoothedCameraPos = smoothedCameraPos:Lerp(desired, alpha)
-		end
-		camera.CFrame = CFrame.lookAt(smoothedCameraPos, focus)
-
-		local pos = chassis.Position
-		local speed = 0
-		local previous = lastChassisPos
-		if previous and not longGap and dt > 1e-4 then
-			local distance = (pos - previous).Magnitude
-			local maxFrameDistance = math.max(8, LabConfig.MaxForwardSpeed * dt * 3)
-			if distance <= maxFrameDistance then
-				speed = distance / dt
+			smoothedCameraFocus = smoothedCameraFocus:Lerp(targetFocus, alpha)
+			local blendedForward = smoothedCameraForward:Lerp(flat, alpha)
+			smoothedCameraForward = if blendedForward.Magnitude > 0.001 then blendedForward.Unit else flat
+			local desired = smoothedCameraFocus - smoothedCameraForward * 34 + Vector3.new(0, 14, 0)
+			if (smoothedCameraPos - desired).Magnitude > CAMERA_SNAP_DISTANCE then
+				smoothedCameraPos = desired
+			else
+				smoothedCameraPos = smoothedCameraPos:Lerp(desired, alpha)
 			end
 		end
-		lastChassisPos = pos
+		camera.CFrame = CFrame.lookAt(smoothedCameraPos, smoothedCameraFocus)
 
+		local speed = if motion
+			then math.abs(velocity:Dot(flat))
+			else (if previousReplicatedPos and dt > 1e-4 then correctionDistance / dt else 0)
 		local targetFov = 68 + math.clamp(speed / LabConfig.MaxForwardSpeed, 0, 1) * 18
 		camera.FieldOfView += (targetFov - camera.FieldOfView) * math.min(1, dt * 4)
 	end)

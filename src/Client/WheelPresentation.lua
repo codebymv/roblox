@@ -3,11 +3,9 @@
 --[[
 	Client-rendered wheel visuals for the server-owned raycast truck.
 
-	The server wheel Parts remain the authoritative suspension targets, but
-	anchored Part CFrames replicate in discrete updates. Rendering those Parts
-	directly makes them vibrate independently of Roblox's interpolated chassis.
-	This module hides them locally, smooths their chassis-relative suspension
-	position and steering axis, and integrates spin every render frame.
+	Source Wheel* Parts are cloned once for mesh/material, then ignored for pose.
+	Each frame places visuals from chassis × LabConfig mounts × LabMotion
+	steer/compression so anchored-part replication cannot hitch the suspension.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -17,9 +15,12 @@ local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local LabConfig = require(Shared:WaitForChild("LabConfig"))
 
+local LabMotionState = require(script.Parent:WaitForChild("LabMotionState"))
+
 local WHEEL_IDS = { "FL", "FR", "RL", "RR" }
 local POSITION_RATE = 24
 local STEERING_RATE = 28
+local SPEED_RATE = 16
 local TARGET_REFRESH_SECONDS = 0.25
 local REBUILD_DEBOUNCE_SECONDS = 0.15
 local FULL_TURN = 2 * math.pi
@@ -29,6 +30,7 @@ type WheelVisual = {
 	sourceHub: BasePart?,
 	wheel: BasePart,
 	hub: BasePart?,
+	steer: boolean,
 	localPosition: Vector3,
 	localAxle: Vector3,
 	spin: number,
@@ -48,7 +50,6 @@ local function cloneVisualPart(source: BasePart, name: string, parent: Instance)
 	clone.CanTouch = false
 	clone.CanQuery = false
 	clone.CastShadow = source.CastShadow
-	-- Server targets are fully transparent; the client copy must paint itself.
 	clone.Transparency = 0
 	clone.LocalTransparencyModifier = 0
 	clone.Parent = parent
@@ -66,6 +67,34 @@ local function findRig(): (Model?, BasePart?)
 		return nil, nil
 	end
 	return truck, chassis
+end
+
+local function compressionFor(id: string): number
+	local motion = LabMotionState.get()
+	if not motion then
+		return LabConfig.SuspensionStaticCompression
+	end
+	if id == "FL" then
+		return math.clamp(motion.cFL, 0, 1)
+	elseif id == "FR" then
+		return math.clamp(motion.cFR, 0, 1)
+	elseif id == "RL" then
+		return math.clamp(motion.cRL, 0, 1)
+	end
+	return math.clamp(motion.cRR, 0, 1)
+end
+
+local function targetWheelLocal(body: BasePart, id: string, steerAngle: number): (Vector3, Vector3)
+	local offset = LabConfig.WheelOffsets[id]
+	local steer = id == "FL" or id == "FR"
+	local compression = compressionFor(id)
+	local travel = LabConfig.SuspensionRestLength * (1 - compression) - LabConfig.WheelRadius
+	local steerRotation = if steer then CFrame.Angles(0, steerAngle, 0) else CFrame.identity
+	local mountCF = body.CFrame * CFrame.new(offset) * steerRotation
+	local center = mountCF.Position - mountCF.UpVector * math.max(0, travel)
+	local localFrame =
+		body.CFrame:ToObjectSpace(CFrame.fromMatrix(center, mountCF.RightVector, mountCF.UpVector, -mountCF.LookVector))
+	return localFrame.Position, localFrame.RightVector
 end
 
 function WheelPresentation.mount()
@@ -88,7 +117,7 @@ function WheelPresentation.mount()
 	local visuals: { [string]: WheelVisual } = {}
 	local refreshAt = 0
 	local lastRebuildAt = 0
-	local lastBodyPos: Vector3? = nil
+	local smoothedForwardSpeed = 0
 
 	local function clearVisuals()
 		for _, visual in visuals do
@@ -101,7 +130,7 @@ function WheelPresentation.mount()
 		end
 		table.clear(visuals)
 		folder:ClearAllChildren()
-		lastBodyPos = nil
+		smoothedForwardSpeed = 0
 	end
 
 	local function rebuild(truck: Model, body: BasePart)
@@ -109,7 +138,12 @@ function WheelPresentation.mount()
 		currentTruck = truck
 		chassis = body
 		lastRebuildAt = os.clock()
-		lastBodyPos = body.Position
+
+		local motion = LabMotionState.get()
+		local steerAngle = if motion then motion.steer else 0
+		smoothedForwardSpeed = if motion
+			then motion.vx * body.CFrame.LookVector.X + motion.vz * body.CFrame.LookVector.Z
+			else 0
 
 		for _, id in WHEEL_IDS do
 			local source = truck:FindFirstChild("Wheel" .. id)
@@ -118,7 +152,7 @@ function WheelPresentation.mount()
 			end
 			local sourceHub = source:FindFirstChild("Hub")
 			local hubPart = if sourceHub and sourceHub:IsA("BasePart") then sourceHub else nil
-			local targetLocal = body.CFrame:ToObjectSpace(source.CFrame)
+			local localPosition, localAxle = targetWheelLocal(body, id, steerAngle)
 
 			source.LocalTransparencyModifier = 1
 			if hubPart then
@@ -130,13 +164,15 @@ function WheelPresentation.mount()
 				sourceHub = hubPart,
 				wheel = cloneVisualPart(source, "Wheel" .. id .. "_Visual", folder),
 				hub = if hubPart then cloneVisualPart(hubPart, "Hub" .. id .. "_Visual", folder) else nil,
-				localPosition = targetLocal.Position,
-				localAxle = targetLocal.RightVector,
+				steer = id == "FL" or id == "FR",
+				localPosition = localPosition,
+				localAxle = localAxle,
 				spin = 0,
 			}
 		end
 	end
 
+	-- Identity / Parent only. Compression changes must not destroy clones.
 	local function rigNeedsRebuild(truck: Model): boolean
 		for _, id in WHEEL_IDS do
 			local source = truck:FindFirstChild("Wheel" .. id)
@@ -147,14 +183,7 @@ function WheelPresentation.mount()
 			if not visual or visual.source ~= source or not visual.wheel.Parent then
 				return true
 			end
-			local sourceHub = source:FindFirstChild("Hub")
-			if
-				not sourceHub
-				or not sourceHub:IsA("BasePart")
-				or visual.sourceHub ~= sourceHub
-				or not visual.hub
-				or not visual.hub.Parent
-			then
+			if not visual.source.Parent then
 				return true
 			end
 		end
@@ -164,20 +193,12 @@ function WheelPresentation.mount()
 	RunService.RenderStepped:Connect(function(dt: number)
 		local now = os.clock()
 		local needsRefresh = now >= refreshAt
-		if not needsRefresh then
-			if
-				currentTruck
-				and (not currentTruck.Parent or not chassis or not chassis.Parent or rigNeedsRebuild(currentTruck))
-			then
-				needsRefresh = true
-			else
-				for _, visual in visuals do
-					if not visual.source.Parent then
-						needsRefresh = true
-						break
-					end
-				end
-			end
+		if
+			not needsRefresh
+			and currentTruck
+			and (not currentTruck.Parent or not chassis or not chassis.Parent or rigNeedsRebuild(currentTruck))
+		then
+			needsRefresh = true
 		end
 		if needsRefresh then
 			refreshAt = now + TARGET_REFRESH_SECONDS
@@ -205,47 +226,35 @@ function WheelPresentation.mount()
 			return
 		end
 
+		local motion = LabMotionState.get()
+		local steerAngle = if motion then motion.steer else 0
+		local look = body.CFrame.LookVector
+		local targetForwardSpeed = if motion then motion.vx * look.X + motion.vy * look.Y + motion.vz * look.Z else 0
+		local speedAlpha = 1 - math.exp(-SPEED_RATE * dt)
+		smoothedForwardSpeed += (targetForwardSpeed - smoothedForwardSpeed) * speedAlpha
+		local forwardSpeed = smoothedForwardSpeed
+
 		local positionAlpha = 1 - math.exp(-POSITION_RATE * dt)
 		local steeringAlpha = 1 - math.exp(-STEERING_RATE * dt)
-		-- Server-owned assemblies often expose sparse AssemblyLinearVelocity on
-		-- the client; position delta matches the interpolated chassis motion.
-		local bodyPos = body.Position
-		local forwardSpeed = 0
-		local previousPos = lastBodyPos
-		if previousPos and dt > 1e-4 then
-			local delta = bodyPos - previousPos
-			-- A reset teleports the same truck back to the start, so lifecycle
-			-- invalidation cannot catch it by model identity. Treat distances no
-			-- physically plausible frame can cover as a new motion sample.
-			local maxFrameDistance = math.max(8, LabConfig.MaxForwardSpeed * dt * 3)
-			if delta.Magnitude <= maxFrameDistance then
-				forwardSpeed = delta:Dot(body.CFrame.LookVector) / dt
-			end
-		end
-		lastBodyPos = bodyPos
 
-		for _, visual in visuals do
+		for id, visual in visuals do
 			if not visual.source.Parent then
 				continue
 			end
 
-			local target = body.CFrame:ToObjectSpace(visual.source.CFrame)
-			if (target.Position - visual.localPosition).Magnitude > 4 then
-				visual.localPosition = target.Position
+			local targetPos, targetAxle = targetWheelLocal(body, id, steerAngle)
+			if (targetPos - visual.localPosition).Magnitude > 4 then
+				visual.localPosition = targetPos
 			else
-				visual.localPosition = visual.localPosition:Lerp(target.Position, positionAlpha)
+				visual.localPosition = visual.localPosition:Lerp(targetPos, positionAlpha)
 			end
 
-			local targetAxle = target.RightVector
 			if visual.localAxle:Dot(targetAxle) < 0 then
 				targetAxle = -targetAxle
 			end
 			local axle = visual.localAxle:Lerp(targetAxle, steeringAlpha)
 			visual.localAxle = if axle.Magnitude > 0.001 then axle.Unit else Vector3.xAxis
 
-			-- Build a stable unspun wheel frame. RightVector is the cylinder axle
-			-- and is invariant under the server's tread spin, so packet gaps cannot
-			-- make interpolation choose the wrong side of a 180-degree rotation.
 			local localForward = Vector3.new(0, 0, -1)
 			local longitudinal = localForward - visual.localAxle * localForward:Dot(visual.localAxle)
 			longitudinal = if longitudinal.Magnitude > 0.001 then longitudinal.Unit else Vector3.new(0, 0, -1)

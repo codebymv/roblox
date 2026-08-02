@@ -13,11 +13,14 @@
 	them on one bus is what made the snap quieter than the tyres, because there
 	was no way to lower one without lowering the other.
 
-	Ducking closes the rest of the gap. Rather than raising events until they
-	clip, an event briefly pulls the music and the bed down underneath itself,
-	which is how the same sound reads louder without being louder. Depth is per
-	bus: music takes the bigger cut, because it is the layer nobody needs to
-	hear during a crisis.
+	Two things close the rest of the gap, and they answer different questions. A
+	sidechain compressor on the music and the bed, keyed to the event bus, reacts
+	to how loud an event actually is. A manual duck reacts to how much an event
+	is meant to matter, which is design intent the compressor cannot infer.
+
+	Either way the principle is the same: rather than raising events until they
+	clip, the layers underneath give way. Music gives up the most, because it is
+	the layer with the least to say during a crisis.
 
 	Engine-free on purpose, so Tests/Headless.luau can assert that the bed never
 	sums above the event bus.
@@ -27,7 +30,7 @@ local AudioMix = {}
 
 -- Final gain is bus volume times sound volume, so these two tables multiply.
 AudioMix.Bus = {
-	Music = 0.8,
+	Music = 0.62,
 	SfxBed = 0.85,
 	SfxEvents = 1,
 }
@@ -134,11 +137,53 @@ AudioMix.DuckWeight = {
 	DeliveryFailure = 1,
 }
 
--- Fraction of its own level a bus gives up at full duck.
+--[[
+	Manual duck depth, now that a real sidechain compressor sits underneath.
+
+	The compressor reacts to how loud an event actually is; this reacts to how
+	much an event is meant to matter, which is information the compressor cannot
+	have. A strap snapping and a countdown tick can hit the same peak level and
+	deserve completely different amounts of room.
+
+	Both cut, so both came down when the compressor went in. Leaving them at the
+	old depths stacked two ducks on the same transient and pumped.
+]]
 AudioMix.DuckDepth = {
-	Music = 0.6,
-	SfxBed = 0.35,
+	Music = 0.45,
+	SfxBed = 0.25,
 	SfxEvents = 0,
+}
+
+--[[
+	Sidechain compression, done by the engine rather than by an envelope.
+
+	CompressorSoundEffect takes a SoundGroup as its SideChain, so the music and
+	the bed can be compressed by the level of the event bus directly: continuous,
+	sample-accurate, and proportional to the actual signal instead of to a
+	per-event weight sampled at Heartbeat.
+
+	Attack is fast enough to catch a transient's leading edge; release is several
+	times longer, because a release shorter than the attack is audible as
+	pumping rather than as space. Music takes the harder ratio and the lower
+	threshold: it is the layer with the least to say during a crisis.
+]]
+AudioMix.SideChainBus = "SfxEvents"
+
+AudioMix.Compressor = {
+	Music = {
+		thresholdDb = -24,
+		ratio = 6,
+		attackSeconds = 0.02,
+		releaseSeconds = 0.3,
+		gainMakeupDb = 0,
+	},
+	SfxBed = {
+		thresholdDb = -18,
+		ratio = 3.5,
+		attackSeconds = 0.03,
+		releaseSeconds = 0.22,
+		gainMakeupDb = 0,
+	},
 }
 
 -- Fast in, hold through the transient, slow out. A quick release is audible as

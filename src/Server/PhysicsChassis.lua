@@ -18,6 +18,7 @@
 
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local LabConfig = require(Shared:WaitForChild("LabConfig"))
@@ -441,6 +442,15 @@ function PhysicsChassis:_createWheel(id: string)
 
 	local existing = self.wheels[id]
 	if existing then
+		-- Force actuators live on the chassis rather than under the disposable
+		-- wheel target. Destroy them explicitly or a repaired wheel leaves an
+		-- invisible copy of its last force pushing forever.
+		if existing.vectorForce and existing.vectorForce.Parent then
+			existing.vectorForce:Destroy()
+		end
+		if existing.forceAttachment and existing.forceAttachment.Parent then
+			existing.forceAttachment:Destroy()
+		end
 		if existing.part and existing.part.Parent then
 			existing.part:Destroy()
 		end
@@ -940,6 +950,46 @@ function PhysicsChassis:getSpeed(): number
 	return chassis.AssemblyLinearVelocity.Magnitude
 end
 
+--[[
+	Authoritative motion for client camera / wheel presentation. Numbers only so
+	LabMotion can stay on an UnreliableRemoteEvent at ~20 Hz.
+]]
+function PhysicsChassis:getMotionSample(): { [string]: number }?
+	local chassis = self.chassis
+	if not chassis or not chassis.Parent then
+		return nil
+	end
+	local pos = chassis.Position
+	local vel = chassis.AssemblyLinearVelocity
+	local look = chassis.CFrame.LookVector
+	local flat = Vector3.new(look.X, 0, look.Z)
+	local yaw = 0
+	if flat.Magnitude > 0.01 then
+		flat = flat.Unit
+		yaw = math.atan2(flat.X, flat.Z)
+	end
+	local fl = self.wheels.FL
+	local fr = self.wheels.FR
+	local rl = self.wheels.RL
+	local rr = self.wheels.RR
+	return {
+		t = Workspace:GetServerTimeNow(),
+		px = pos.X,
+		py = pos.Y,
+		pz = pos.Z,
+		vx = vel.X,
+		vy = vel.Y,
+		vz = vel.Z,
+		yaw = yaw,
+		steer = self.steerAngle,
+		speed = vel.Magnitude,
+		cFL = if fl then fl.compression else 0,
+		cFR = if fr then fr.compression else 0,
+		cRL = if rl then rl.compression else 0,
+		cRR = if rr then rr.compression else 0,
+	}
+end
+
 function PhysicsChassis:getForwardSpeed(): number
 	local chassis = self.chassis
 	if not chassis or not chassis.Parent then
@@ -993,7 +1043,17 @@ end
 function PhysicsChassis:hasCompleteWheelSet(): boolean
 	for _, id in WHEEL_ORDER do
 		local wheel = self.wheels[id]
-		if not wheel or not wheel.part or not wheel.part.Parent or not wheel.hub or not wheel.hub.Parent then
+		if
+			not wheel
+			or not wheel.part
+			or not wheel.part.Parent
+			or not wheel.hub
+			or not wheel.hub.Parent
+			or not wheel.forceAttachment
+			or not wheel.forceAttachment.Parent
+			or not wheel.vectorForce
+			or not wheel.vectorForce.Parent
+		then
 			return false
 		end
 	end

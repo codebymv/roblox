@@ -10,6 +10,8 @@ local REMOTE_NAMES = {
 	LabDebug = "LabDebug",
 	LabEvent = "LabEvent",
 	LabDrive = "LabDrive",
+	-- Authoritative chassis motion for client camera/wheels (server → clients).
+	LabMotion = "LabMotion",
 	LabMoveTo = "LabMoveTo",
 	LabWork = "LabWork",
 	LabRestart = "LabRestart",
@@ -21,6 +23,13 @@ local REMOTE_NAMES = {
 	LabPaint = "LabPaint",
 	LabDevCommand = "LabDevCommand",
 }
+
+-- Droppable high-rate samples; missing a packet must not stall gameplay.
+local UNRELIABLE_REMOTES: { [string]: boolean } = {
+	[REMOTE_NAMES.LabMotion] = true,
+}
+
+export type AnyRemote = RemoteEvent | UnreliableRemoteEvent
 
 local Net = {
 	Names = REMOTE_NAMES,
@@ -39,7 +48,19 @@ local Net = {
 local isServer = RunService:IsServer()
 
 local cachedFolder: Folder? = nil
-local cachedRemotes: { [string]: RemoteEvent } = {}
+local cachedRemotes: { [string]: AnyRemote } = {}
+
+local function isRemote(instance: Instance): boolean
+	return instance:IsA("RemoteEvent") or instance:IsA("UnreliableRemoteEvent")
+end
+
+local function createRemote(name: string): AnyRemote
+	local remote: AnyRemote = if UNRELIABLE_REMOTES[name]
+		then Instance.new("UnreliableRemoteEvent")
+		else Instance.new("RemoteEvent")
+	remote.Name = name
+	return remote
+end
 
 local function getFolder(): Folder
 	local cached = cachedFolder
@@ -67,16 +88,26 @@ end
 function Net.ensureServer(): Folder
 	local folder = getFolder()
 	for _, name in pairs(REMOTE_NAMES) do
-		if not folder:FindFirstChild(name) then
-			local remote = Instance.new("RemoteEvent")
-			remote.Name = name
+		local existing = folder:FindFirstChild(name)
+		local wantsUnreliable = UNRELIABLE_REMOTES[name] == true
+		local wrongKind = existing ~= nil
+			and (
+				(wantsUnreliable and not existing:IsA("UnreliableRemoteEvent"))
+				or (not wantsUnreliable and not existing:IsA("RemoteEvent"))
+			)
+		if not existing or wrongKind then
+			if existing then
+				-- Rolling publish: replace leftover reliable/unreliable mismatch.
+				existing:Destroy()
+			end
+			local remote = createRemote(name)
 			remote.Parent = folder
 		end
 	end
 	return folder
 end
 
-function Net.get(name: string): RemoteEvent
+function Net.get(name: string): AnyRemote
 	local cached = cachedRemotes[name]
 	if cached and cached.Parent then
 		return cached
@@ -84,9 +115,9 @@ function Net.get(name: string): RemoteEvent
 
 	local folder = getFolder()
 	local remote = folder:WaitForChild(name, 10)
-	assert(remote and remote:IsA("RemoteEvent"), "Missing RemoteEvent: " .. name)
-	cachedRemotes[name] = remote
-	return remote
+	assert(remote and isRemote(remote), "Missing remote: " .. name)
+	cachedRemotes[name] = remote :: AnyRemote
+	return remote :: AnyRemote
 end
 
 return Net

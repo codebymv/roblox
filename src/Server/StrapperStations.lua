@@ -29,7 +29,7 @@ local LabConfig = require(Shared:WaitForChild("LabConfig"))
 local StrapperStations = {}
 StrapperStations.__index = StrapperStations
 
-local OWNERSHIP_SETTLE_SECONDS = 0.45
+local OWNERSHIP_SETTLE_SECONDS = 0.6
 
 function StrapperStations.new(chassisRig, cargoLoad)
 	return setmetatable({

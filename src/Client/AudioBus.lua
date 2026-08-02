@@ -55,6 +55,43 @@ function AudioBus.get(name: string): SoundGroup
 end
 
 --[[
+	Attach the sidechain compressor a bus declares, if it declares one.
+
+	Deferred until every bus exists, because SideChain names another SoundGroup
+	and the event bus may not have been created when the music bus asks for its
+	compressor. Idempotent: a second mount finds the effect already there.
+]]
+local function attachCompressor(name: string)
+	local settings = AudioMix.Compressor[name]
+	if not settings then
+		return
+	end
+
+	local group = AudioBus.get(name)
+	if group:FindFirstChild("SideChain") then
+		return
+	end
+
+	local sideChain = AudioBus.get(AudioMix.SideChainBus)
+	if sideChain == group then
+		-- A bus keyed to itself is a limiter, not a sidechain, and would quietly
+		-- squash the very transients this exists to protect.
+		warn("[CargoAudio] Refusing to sidechain " .. name .. " to itself")
+		return
+	end
+
+	local compressor = Instance.new("CompressorSoundEffect")
+	compressor.Name = "SideChain"
+	compressor.Threshold = settings.thresholdDb
+	compressor.Ratio = settings.ratio
+	compressor.Attack = settings.attackSeconds
+	compressor.Release = settings.releaseSeconds
+	compressor.GainMakeup = settings.gainMakeupDb
+	compressor.SideChain = sideChain
+	compressor.Parent = group
+end
+
+--[[
 	Pull the mix down under something worth hearing. Amount is 0 to 1; the
 	loudest request wins rather than accumulating, so a cargo impact landing
 	inside a strap snap does not duck to silence.
@@ -76,6 +113,10 @@ function AudioBus.mount()
 
 	for _, name in BUS_NAMES do
 		AudioBus.get(name)
+	end
+	-- Second pass: every bus exists now, so a compressor can name another one.
+	for _, name in BUS_NAMES do
+		attachCompressor(name)
 	end
 
 	RunService.Heartbeat:Connect(function(dt: number)

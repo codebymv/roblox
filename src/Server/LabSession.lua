@@ -49,8 +49,9 @@ local LabRigPolicy = require(Shared:WaitForChild("LabRigPolicy"))
 
 local SNAPSHOT_INTERVAL = 0.1
 local DEBUG_INTERVAL = 0.2
--- Safety poll only; seating paths reclaim immediately. Slower than SeatWeld settle.
+-- Safety poll only outside Run; seating paths reclaim immediately.
 local OWNERSHIP_INTERVAL = 2
+local MOTION_INTERVAL = 0.05
 local INPUT_SAMPLE_INTERVAL = 0.25
 
 -- Chassis impulses run on Stepped with a fixed accumulator so hitchy wall-clock
@@ -105,12 +106,14 @@ function LabSession.new(config: Config)
 		-- Record keys each player beat on the last finished run, by UserId.
 		recordsBeaten = {},
 
-		driveLimiter = RateLimiter.new(25, 40),
+		-- Coalesced client flush targets 60 Hz on changed axes; burst covers edges.
+		driveLimiter = RateLimiter.new(40, 60),
 		actionLimiter = RateLimiter.new(8, 12),
 
 		snapshotAccumulator = 0,
 		debugAccumulator = 0,
 		ownershipAccumulator = 0,
+		motionAccumulator = 0,
 		sampleAccumulator = 0,
 		deliveryAccumulator = 0,
 		physicsAccumulator = 0,
@@ -1285,18 +1288,20 @@ function LabSession:step(dt: number)
 	self.phaseClock += dt
 
 	--[[
-		Seats can still hand ownership if Auto flips back on. Seating paths
-		reclaim immediately; this is a slow safety poll that only mutates when
-		ownership actually drifted (claimOwnership no-ops otherwise).
+		Seats can still hand ownership if Auto flips back on. Seating / GO paths
+		reclaim immediately. Mid-Run polls are disabled: a reclaim that breaks
+		SeatWeld is a hitch, and Auto is pinned false after the first claim.
 	]]
-	self.ownershipAccumulator += dt
-	if self.ownershipAccumulator >= OWNERSHIP_INTERVAL then
-		self.ownershipAccumulator = 0
-		if self.chassisRig and self.chassisRig:claimOwnership() and self.stations then
-			self.stations:markOwnershipSettle()
-		end
-		if self.cargoLoad then
-			self.cargoLoad:claimOwnership()
+	if self.phase ~= "Run" then
+		self.ownershipAccumulator += dt
+		if self.ownershipAccumulator >= OWNERSHIP_INTERVAL then
+			self.ownershipAccumulator = 0
+			if self.chassisRig and self.chassisRig:claimOwnership() and self.stations then
+				self.stations:markOwnershipSettle()
+			end
+			if self.cargoLoad then
+				self.cargoLoad:claimOwnership()
+			end
 		end
 	end
 
@@ -1323,6 +1328,17 @@ function LabSession:step(dt: number)
 		self.restartSeconds = math.max(0, self.resultDuration - self.phaseClock)
 		if self.phaseClock >= self.resultDuration then
 			self:enterStaging()
+		end
+	end
+
+	if self.phase == "Run" or self.phase == "Staging" then
+		self.motionAccumulator += dt
+		if self.motionAccumulator >= MOTION_INTERVAL then
+			self.motionAccumulator = 0
+			local sample = self.chassisRig and self.chassisRig:getMotionSample()
+			if sample then
+				LabRemotes.fireAllClients(Net.Names.LabMotion, sample)
+			end
 		end
 	end
 
