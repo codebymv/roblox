@@ -406,6 +406,22 @@ function PhysicsChassis:_build()
 		self:_createWheel(id)
 	end
 
+	-- Crosswind and other whole-body pushes. At the centre of mass, because a
+	-- gust that also produced yaw torque would be a second, hidden steering
+	-- input rather than the environmental pressure it is meant to be.
+	local bodyAttachment = Instance.new("Attachment")
+	bodyAttachment.Name = "Force_Body"
+	bodyAttachment.Parent = chassis
+
+	local bodyForce = Instance.new("VectorForce")
+	bodyForce.Name = "BodyForce"
+	bodyForce.Attachment0 = bodyAttachment
+	bodyForce.RelativeTo = Enum.ActuatorRelativeTo.World
+	bodyForce.ApplyAtCenterOfMass = true
+	bodyForce.Force = Vector3.zero
+	bodyForce.Parent = chassis
+	self.bodyForce = bodyForce
+
 	local rayParams = RaycastParams.new()
 	rayParams.FilterType = Enum.RaycastFilterType.Exclude
 	rayParams.IgnoreWater = true
@@ -465,11 +481,44 @@ function PhysicsChassis:_createWheel(id: string)
 	hub.CFrame = wheel.CFrame
 	hub.Parent = wheel
 
+	--[[
+		Suspension, grip and drive are applied through a persistent VectorForce
+		rather than an impulse per step.
+
+		Roblox's solver runs at 240Hz. ApplyImpulseAtPosition delivers the whole
+		frame's momentum change in a single substep and leaves the other three
+		with no suspension force at all -- a spring that only exists a quarter of
+		the time, which is what chugging is. A VectorForce is integrated by every
+		substep.
+
+		The two are momentum-identical: an impulse of F*dt equals a force of F
+		held for dt. Every grip and spring number in LabConfig carries over
+		unchanged; only the distribution inside the frame moves.
+	]]
+	local forceAttachment = Instance.new("Attachment")
+	forceAttachment.Name = "Force_" .. id
+	forceAttachment.Position = offset
+	forceAttachment.Parent = chassis
+
+	local vectorForce = Instance.new("VectorForce")
+	vectorForce.Name = "WheelForce_" .. id
+	vectorForce.Attachment0 = forceAttachment
+	-- World-relative: the contact normal and the flattened contact-patch axes
+	-- these forces are built from are world vectors already.
+	vectorForce.RelativeTo = Enum.ActuatorRelativeTo.World
+	-- Applied at the wheel mount, not the centre of mass, so it still produces
+	-- the roll and pitch torque that makes weight transfer real.
+	vectorForce.ApplyAtCenterOfMass = false
+	vectorForce.Force = Vector3.zero
+	vectorForce.Parent = chassis
+
 	self.wheels[id] = {
 		id = id,
 		offset = offset,
 		part = wheel,
 		hub = hub,
+		forceAttachment = forceAttachment,
+		vectorForce = vectorForce,
 		steer = id == "FL" or id == "FR",
 		drive = id == "RL" or id == "RR",
 		grounded = false,
@@ -568,6 +617,26 @@ function PhysicsChassis:_springRate(extraMass: number): (number, number)
 	return stiffness, damping
 end
 
+--[[
+	Zero every persistent force.
+
+	An impulse that is not applied simply does not happen. A VectorForce that is
+	not updated keeps pushing, so anything that stops or relocates the truck has
+	to clear them or the next unfrozen frame starts with whatever the truck was
+	doing when it was parked.
+]]
+function PhysicsChassis:_clearForces()
+	for _, id in WHEEL_ORDER do
+		local wheel = self.wheels[id]
+		if wheel and wheel.vectorForce and wheel.vectorForce.Parent then
+			wheel.vectorForce.Force = Vector3.zero
+		end
+	end
+	if self.bodyForce and self.bodyForce.Parent then
+		self.bodyForce.Force = Vector3.zero
+	end
+end
+
 function PhysicsChassis:applyExternalAccel(accel: Vector3)
 	self.externalAccel = accel
 end
@@ -606,6 +675,7 @@ end
 function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 	local chassis = self.chassis
 	if not chassis or not chassis.Parent or chassis.Anchored then
+		self:_clearForces()
 		return
 	end
 
@@ -712,7 +782,10 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 			local springVelocity = pointVelocity:Dot(normal)
 
 			local force = safeClamp(stiffness * compression * health - damping * springVelocity, 0, maxSpringForce)
-			chassis:ApplyImpulseAtPosition(normal * force * dt, mountWorld)
+			-- Accumulated rather than applied. Suspension, lateral grip and
+			-- drive all act at the same contact patch, so they become one
+			-- VectorForce at the end of this branch.
+			local wheelForce = normal * force
 
 			local surfaceName = result.Instance:GetAttribute("LabSurface")
 			local surface = LabConfig.surface(if typeof(surfaceName) == "string" then surfaceName else nil)
@@ -740,7 +813,7 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 			local desiredLateral = -lateralVelocity * grip * (mass / 4) * surfaceGrip
 			local gripBudget = math.max(0, force * LabConfig.GripLimitPerWheel * surfaceGrip)
 			local lateralForce = clampSymmetric(desiredLateral, gripBudget)
-			chassis:ApplyImpulseAtPosition(wheelRight * lateralForce * dt, mountWorld)
+			wheelForce += wheelRight * lateralForce
 
 			local longitudinal = 0
 			local along = pointVelocity:Dot(wheelForward)
@@ -781,7 +854,8 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 				longitudinal -= math.sign(along) * surface.resistance * (mass / 4)
 			end
 
-			chassis:ApplyImpulseAtPosition(wheelForward * longitudinal * dt, mountWorld)
+			wheelForce += wheelForward * longitudinal
+			wheel.vectorForce.Force = wheelForce
 			self.brakeForce = if input.braking then math.abs(longitudinal) / math.max(mass, 1) else 0
 
 			wheel.spin += (along / LabConfig.WheelRadius) * dt
@@ -797,6 +871,9 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 			wheel.compression = 0
 			wheel.normalForce = 0
 			wheel.surface = "Air"
+			-- An airborne wheel pushes on nothing. A persistent force has to be
+			-- cleared explicitly, where an impulse simply was not applied.
+			wheel.vectorForce.Force = Vector3.zero
 			local wheelCF = self:_mountWheelVisual(
 				cf,
 				wheel.offset,
@@ -811,8 +888,8 @@ function PhysicsChassis:step(dt: number, input: DriveInput, extraMass: number)
 		end
 	end
 
-	if self.externalAccel.Magnitude > 0.01 then
-		chassis:ApplyImpulseAtPosition(self.externalAccel * mass * dt, cf.Position)
+	if self.bodyForce then
+		self.bodyForce.Force = if self.externalAccel.Magnitude > 0.01 then self.externalAccel * mass else Vector3.zero
 	end
 
 	-- Raycast vehicles accumulate a slow yaw drift with no real tyre contact
@@ -948,6 +1025,7 @@ function PhysicsChassis:setFrozen(frozen: boolean)
 	end
 	chassis.AssemblyLinearVelocity = Vector3.zero
 	chassis.AssemblyAngularVelocity = Vector3.zero
+	self:_clearForces()
 	chassis.Anchored = frozen
 	if frozen then
 		-- Clear measured accel so StrapperStations cannot throw crew during Result
@@ -999,6 +1077,7 @@ function PhysicsChassis:reset()
 	self:ensureWheelSet()
 	self:teleport(self.route.startCFrame)
 
+	self:_clearForces()
 	self.steerAngle = 0
 	self.integrity = LabConfig.MaxChassisIntegrity
 	self.wrecked = false

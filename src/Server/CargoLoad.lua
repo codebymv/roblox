@@ -131,8 +131,22 @@ function CargoLoad:_build()
 	dragRayParams.IgnoreWater = true
 	dragRayParams.FilterDescendantsInstances = { self.chassisRig:getModel(), crate }
 
+	-- Ground drag, held rather than pulsed. See the comment at the use site.
+	local dragAttachment = Instance.new("Attachment")
+	dragAttachment.Name = "DragForce"
+	dragAttachment.Parent = crate
+
+	local dragForce = Instance.new("VectorForce")
+	dragForce.Name = "Drag"
+	dragForce.Attachment0 = dragAttachment
+	dragForce.RelativeTo = Enum.ActuatorRelativeTo.World
+	dragForce.ApplyAtCenterOfMass = true
+	dragForce.Force = Vector3.zero
+	dragForce.Parent = crate
+
 	self.crate = crate
 	self.pallet = pallet
+	self.dragForce = dragForce
 	self.dragRayParams = dragRayParams
 	self.crateMass = crate.AssemblyMass
 
@@ -623,10 +637,10 @@ function CargoLoad:step(dt: number)
 		end
 	end
 
-	self:_updateCondition(dt, bodyCF)
+	self:_updateCondition(bodyCF)
 end
 
-function CargoLoad:_updateCondition(dt: number, bodyCF: CFrame)
+function CargoLoad:_updateCondition(bodyCF: CFrame)
 	local crate = self.crate
 
 	local localPosition = bodyCF:PointToObjectSpace(crate.Position)
@@ -661,11 +675,22 @@ function CargoLoad:_updateCondition(dt: number, bodyCF: CFrame)
 	local horizontalSpeed = math.sqrt(vel.X * vel.X + vel.Z * vel.Z)
 	self.dragging = hit ~= nil and self.offset > LabConfig.ShiftedOffset and horizontalSpeed > 3
 
-	if self.dragging then
-		-- Real drag on the crate. The straps then pull the truck around, which
-		-- is why a dragging load is a handling problem and not a status effect.
-		local resist = -crate.AssemblyLinearVelocity * LabConfig.DragForcePerStud * dt
-		crate:ApplyImpulseAtPosition(Vector3.new(resist.X, 0, resist.Z), crate.Position)
+	--[[
+		Real drag on the crate. The straps then pull the truck around, which is
+		why a dragging load is a handling problem and not a status effect.
+
+		A VectorForce rather than a per-step impulse, for the same reason the
+		chassis uses one: the solver runs at 240Hz and an impulse only exists in
+		the first substep. Drag that stutters makes the truck it is hauling
+		sideways stutter with it.
+	]]
+	if self.dragForce and self.dragForce.Parent then
+		if self.dragging then
+			local resist = -crate.AssemblyLinearVelocity * LabConfig.DragForcePerStud
+			self.dragForce.Force = Vector3.new(resist.X, 0, resist.Z)
+		else
+			self.dragForce.Force = Vector3.zero
+		end
 	end
 
 	local separation = (crate.Position - bodyCF.Position).Magnitude
@@ -815,6 +840,11 @@ function CargoLoad:setFrozen(frozen: boolean)
 	end
 	crate.AssemblyLinearVelocity = Vector3.zero
 	crate.AssemblyAngularVelocity = Vector3.zero
+	-- A held force survives being parked, unlike the impulse this replaced.
+	if self.dragForce and self.dragForce.Parent then
+		self.dragForce.Force = Vector3.zero
+	end
+	self.dragging = false
 	crate.Anchored = frozen
 
 	local pallet = self.pallet

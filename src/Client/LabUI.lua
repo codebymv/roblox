@@ -2044,6 +2044,22 @@ local function findChassis(): BasePart?
 	return cachedChassis
 end
 
+--[[
+	Chase camera tuning.
+
+	FollowSpeed is high enough that the camera reads as rigid to the truck and
+	low enough to absorb a replication correction. MaxLead caps extrapolation so
+	a stalled update stream cannot fling the view ahead of a truck that has
+	actually stopped.
+]]
+local CAMERA_FOLLOW_SPEED = 22
+local CAMERA_MAX_LEAD = 0.12
+local CAMERA_SNAP_DISTANCE = 90
+
+local lastReplicatedPos = Vector3.zero
+local replicationAge = 0
+local smoothedCameraPos = Vector3.zero
+
 local function bindCamera()
 	RunService.RenderStepped:Connect(function(dt: number)
 		local camera = Workspace.CurrentCamera
@@ -2074,15 +2090,44 @@ local function bindCamera()
 		chassisMissingFor = 0
 		camera.CameraType = Enum.CameraType.Scriptable
 
-		-- Hard-follow an already-interpolated server chassis; extra CFrame lerp
-		-- was rubber-banding behind replication steps.
+		--[[
+			The chassis is server-owned, so its CFrame arrives in replication
+			steps rather than every frame. Hard-following it puts every step
+			straight into the camera; lerping toward it trails behind, which is
+			the rubber-banding an earlier version had.
+
+			Neither is right, because both treat a stale position as the truth.
+			Velocity replicates alongside position, so the position between
+			updates is predictable: extrapolate along it for the time since the
+			last change, then damp the camera toward that. The lead cancels the
+			lag instead of hiding it, and the damping absorbs the correction
+			when a fresh update disagrees with the prediction.
+		]]
+		local velocity = chassis.AssemblyLinearVelocity
+		if (chassis.Position - lastReplicatedPos).Magnitude > 1e-3 then
+			lastReplicatedPos = chassis.Position
+			replicationAge = 0
+		else
+			replicationAge = math.min(replicationAge + dt, CAMERA_MAX_LEAD)
+		end
+
+		local predicted = chassis.Position + velocity * replicationAge
 		local look = chassis.CFrame.LookVector
 		local flat = Vector3.new(look.X, 0, look.Z)
 		flat = if flat.Magnitude < 0.01 then Vector3.new(0, 0, 1) else flat.Unit
 
-		local focus = chassis.Position + Vector3.new(0, 3, 0)
-		local desired = CFrame.lookAt(focus - flat * 34 + Vector3.new(0, 14, 0), focus)
-		camera.CFrame = desired
+		local focus = predicted + Vector3.new(0, 3, 0)
+		local desired = focus - flat * 34 + Vector3.new(0, 14, 0)
+
+		-- Frame-rate independent damping. A big jump (respawn, warp, rebuild)
+		-- snaps rather than sweeping the camera across the map.
+		if longGap or (camera.CFrame.Position - desired).Magnitude > CAMERA_SNAP_DISTANCE then
+			smoothedCameraPos = desired
+		else
+			local alpha = 1 - math.exp(-CAMERA_FOLLOW_SPEED * dt)
+			smoothedCameraPos = smoothedCameraPos:Lerp(desired, alpha)
+		end
+		camera.CFrame = CFrame.lookAt(smoothedCameraPos, focus)
 
 		local pos = chassis.Position
 		local speed = 0
