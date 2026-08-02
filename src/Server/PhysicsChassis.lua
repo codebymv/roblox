@@ -229,13 +229,13 @@ function PhysicsChassis:_build()
 
 	local roofVisor =
 		addDetail("RoofVisor", Vector3.new(8.3, 0.18, 1.05), Color3.fromRGB(42, 46, 52), Enum.Material.Metal)
-	roofVisor.CFrame = cab.CFrame * CFrame.new(0, 2.56, -2.45) * CFrame.Angles(math.rad(-10), 0, 0)
+	roofVisor.CFrame = cab.CFrame * CFrame.new(0, 3.36, -2.45) * CFrame.Angles(math.rad(-10), 0, 0)
 	weldTo(chassis, roofVisor)
 
 	for lampIndex = -1, 1 do
 		local marker =
 			addDetail("RoofMarker", Vector3.new(0.34, 0.22, 0.28), Color3.fromRGB(255, 174, 48), Enum.Material.Neon)
-		marker.CFrame = cab.CFrame * CFrame.new(lampIndex * 1.5, 2.62, -1.55)
+		marker.CFrame = cab.CFrame * CFrame.new(lampIndex * 1.5, 3.42, -1.55)
 		weldTo(chassis, marker)
 	end
 
@@ -294,7 +294,7 @@ function PhysicsChassis:_build()
 
 		local door = addDetail(
 			if side == -1 then "DoorL" else "DoorR",
-			Vector3.new(0.14, 2.75, 2.9),
+			Vector3.new(0.14, 3.3, 2.9),
 			Color3.fromRGB(170, 66, 48),
 			Enum.Material.SmoothPlastic
 		)
@@ -981,8 +981,12 @@ function PhysicsChassis:getMotionSample(): { [string]: number }?
 		vy = vel.Y,
 		vz = vel.Z,
 		yaw = yaw,
+		pitch = math.asin(math.clamp(look.Y, -1, 1)),
 		steer = self.steerAngle,
 		speed = vel.Magnitude,
+		ax = self.accelWorld.X,
+		ay = self.accelWorld.Y,
+		az = self.accelWorld.Z,
 		cFL = if fl then fl.compression else 0,
 		cFR = if fr then fr.compression else 0,
 		cRL = if rl then rl.compression else 0,

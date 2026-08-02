@@ -14,17 +14,30 @@ local LabConfig = {
 	-- Roblox mass = volume * density. 9*2.6*16 = 374 studs^3.
 	ChassisDensity = 3.4,
 
-	CabSize = Vector3.new(8.4, 5, 6),
+	--[[
+		The cab is grown about its own centre rather than upward from its base.
+
+		A seated driver's head and hair were clearing the old roof by almost
+		nothing, and any tall hat or hair accessory poked straight through it.
+		Growing symmetrically buys headroom at the top and hides the extra depth
+		inside the chassis, which keeps the cab's centroid exactly where the
+		handling was tuned against -- growing upward from the base would have
+		raised the centre of mass and made the truck quietly more tippy.
+
+		Density falls to hold the mass constant for the same reason. A visual fix
+		should not change how the truck drives.
+	]]
+	CabSize = Vector3.new(8.4, 6.6, 6),
 	CabOffset = Vector3.new(0, 3.8, -5),
-	CabDensity = 0.6,
+	CabDensity = 0.455,
 
 	RailHeight = 1.4,
 
 	-- Visual-only parts (massless, welded to chassis/cab).
 	BedDeckSize = Vector3.new(8.2, 0.22, 10.2),
 	BedDeckOffset = Vector3.new(0, 1.42, 2.4),
-	WindshieldSize = Vector3.new(7.2, 2.1, 0.28),
-	WindshieldOffset = Vector3.new(0, 0.55, -3.05),
+	WindshieldSize = Vector3.new(7.2, 2.8, 0.28),
+	WindshieldOffset = Vector3.new(0, 0.75, -3.05),
 	WindshieldRakeDeg = 14,
 	HeadlightOffset = Vector3.new(2.75, -0.45, -3.15),
 	TaillightOffset = Vector3.new(2.6, 0.35, 8.05),
@@ -92,6 +105,35 @@ local LabConfig = {
 	-- Kills the slow spin a raycast vehicle accumulates with no real tyres.
 	YawDamping = 1.4,
 	MaxAngularSpeed = 3.2,
+
+	-- --------------------------------------------------------------- camera
+	-- Stable chase motion and intentional road feedback are separate layers.
+	-- Horizontal follow stays tight; vertical follow filters suspension heave.
+	CameraFollowRate = 18,
+	CameraVerticalFollowRate = 7,
+	CameraHeadingFollowRate = 14,
+	CameraLeadSeconds = 0.1,
+	CameraMotionStaleSeconds = 0.25,
+	CameraSnapDistance = 90,
+	CameraShakeSpeedStart = 12,
+	CameraShakeSpeedFull = 56,
+	CameraShakeRoad = 0.04,
+	CameraShakeRough = 0.72,
+	CameraShakeShoulder = 0.45,
+	CameraShakeBridge = 0.24,
+	CameraShakeSuspensionFull = 3.5,
+	CameraShakeGradeFullDeg = 14,
+	CameraShakeGradeInfluence = 0.12,
+	CameraShakeMaxTranslation = 0.28,
+	CameraShakeMaxRotationDeg = 0.9,
+	CameraShakeFrequency = 9,
+	CameraShakeAttackRate = 8,
+	CameraShakeReleaseRate = 3.5,
+	CameraImpactAccelStart = 42,
+	CameraImpactAccelFull = 125,
+	CameraImpactTranslation = 0.24,
+	CameraImpactRotationDeg = 1.1,
+	CameraImpactDecay = 5.5,
 
 	-- ------------------------------------------------------------ surfaces
 	-- gripScale, rollingResistance (studs/s^2)

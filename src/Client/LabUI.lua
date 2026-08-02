@@ -19,6 +19,7 @@ local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local DevConfig = require(Shared:WaitForChild("DevConfig"))
 local LabConfig = require(Shared:WaitForChild("LabConfig"))
+local CameraFeedback = require(Shared:WaitForChild("CameraFeedback"))
 local LabRemotes = require(Shared:WaitForChild("LabRemotes"))
 local LabTypes = require(Shared:WaitForChild("LabTypes"))
 local Net = require(Shared:WaitForChild("Net"))
@@ -99,7 +100,7 @@ local lastOffTruckToastAt = 0
 local chassisMissingFor = 0
 local lastSentDrive = { throttle = 0, steering = 0, braking = false }
 local lastDriveSendAt = 0
-local DRIVE_FLUSH_SECONDS = 1 / 60
+local DRIVE_FLUSH_SECONDS = 1 / 30
 local DRIVE_KEEPALIVE_SECONDS = 0.5
 local STEER_QUANTIZE = 0.01
 local presented = nil
@@ -684,7 +685,7 @@ end
 
 --[[
 	Gamepad stick Change can exceed the server LabDrive bucket. CAS/touch/keys
-	update local axes; Heartbeat flushes at 60 Hz. Discrete Begin/End edges send
+	update local axes; Heartbeat flushes at 30 Hz. Discrete Begin/End edges send
 	immediately. Identical payloads are skipped except a keepalive so `at`
 	stays fresh on the server.
 ]]
@@ -2122,23 +2123,14 @@ local function findChassis(): BasePart?
 	return cachedChassis
 end
 
---[[
-	Chase camera tuning.
-
-	FollowSpeed is high enough that the camera reads as rigid to the truck and
-	low enough to absorb a replication correction. MaxLead caps extrapolation so
-	a stalled update stream cannot fling the view ahead of a truck that has
-	actually stopped.
-]]
-local CAMERA_FOLLOW_SPEED = 22
-local CAMERA_MAX_LEAD = 0.12
-local CAMERA_SNAP_DISTANCE = 90
-
 local lastReplicatedPos: Vector3? = nil
-local replicationAge = 0
 local smoothedCameraPos: Vector3? = nil
 local smoothedCameraFocus: Vector3? = nil
 local smoothedCameraForward: Vector3? = nil
+local lastMotionPosition: Vector3? = nil
+local lastMotionTime = 0
+local cameraShakeIntensity = 0
+local cameraImpactKick = 0
 
 local function bindCamera()
 	RunService:BindToRenderStep("CargoLabCamera", Enum.RenderPriority.Camera.Value + 1, function(dt: number)
@@ -2168,6 +2160,9 @@ local function bindCamera()
 				smoothedCameraPos = nil
 				smoothedCameraFocus = nil
 				smoothedCameraForward = nil
+				lastMotionPosition = nil
+				cameraShakeIntensity = 0
+				cameraImpactKick = 0
 			end
 			return
 		end
@@ -2176,55 +2171,49 @@ local function bindCamera()
 		chassisMissingFor = 0
 		camera.CameraType = Enum.CameraType.Scriptable
 
-		--[[
-			Lead from LabMotion (authoritative server velocity), not client
-			AssemblyLinearVelocity which is often sparse on a server-owned
-			assembly. Fall back to position-delta velocity until the first sample.
-		]]
-		local motion = LabMotionState.get()
+		-- Position, velocity and heading must come from one timestamped sample.
+		-- Mixing Roblox replication position with LabMotion velocity was the
+		-- packet-rate camera bump that this resolver removes.
+		local motion = if latest and latest.phase ~= "Result"
+			then LabMotionState.resolve(
+				Workspace:GetServerTimeNow(),
+				LabConfig.CameraLeadSeconds,
+				LabConfig.CameraMotionStaleSeconds
+			)
+			else nil
 		local replicatedPos = chassis.Position
 		local previousReplicatedPos = lastReplicatedPos
 		local correctionDistance = if previousReplicatedPos
 			then (replicatedPos - previousReplicatedPos).Magnitude
 			else 0
 		local teleported = previousReplicatedPos ~= nil and correctionDistance > 24
+		lastReplicatedPos = replicatedPos
 
+		local targetPosition: Vector3
 		local velocity: Vector3
 		local flat: Vector3
+		local suspensionEnergy = 0
+		local gradeDeg = 0
 		if motion then
-			velocity = Vector3.new(motion.vx, motion.vy, motion.vz)
-			flat = Vector3.new(math.sin(motion.yaw), 0, math.cos(motion.yaw))
-			if flat.Magnitude < 0.01 then
-				flat = Vector3.new(0, 0, 1)
-			else
-				flat = flat.Unit
+			targetPosition = motion.position
+			velocity = motion.velocity
+			flat = motion.forward
+			suspensionEnergy = motion.suspensionEnergy
+			gradeDeg = math.deg(motion.sample.pitch)
+			local previousMotionPosition = lastMotionPosition
+			if previousMotionPosition and (targetPosition - previousMotionPosition).Magnitude > 24 then
+				teleported = true
 			end
-			-- Fresh motion sample resets lead; otherwise extrapolate briefly.
-			local sampleAge = math.clamp(Workspace:GetServerTimeNow() - motion.t, 0, CAMERA_MAX_LEAD)
-			replicationAge = sampleAge
+			lastMotionPosition = targetPosition
 		else
-			if not previousReplicatedPos or correctionDistance > 1e-3 then
-				if previousReplicatedPos and correctionDistance > 1e-3 and replicationAge > 1e-4 then
-					velocity = (replicatedPos - previousReplicatedPos) / math.max(replicationAge, dt)
-				else
-					velocity = Vector3.zero
-				end
-				lastReplicatedPos = replicatedPos
-				replicationAge = 0
-			else
-				replicationAge = math.min(replicationAge + dt, CAMERA_MAX_LEAD)
-				velocity = Vector3.zero
-			end
+			targetPosition = replicatedPos
+			velocity = chassis.AssemblyLinearVelocity
 			local look = chassis.CFrame.LookVector
 			flat = Vector3.new(look.X, 0, look.Z)
 			flat = if flat.Magnitude < 0.01 then Vector3.new(0, 0, 1) else flat.Unit
 		end
-		if motion then
-			lastReplicatedPos = replicatedPos
-		end
 
-		local predicted = replicatedPos + velocity * replicationAge
-		local targetFocus = predicted + Vector3.new(0, 3, 0)
+		local targetFocus = targetPosition + Vector3.new(0, 3, 0)
 
 		local needsSnap = longGap
 			or teleported
@@ -2236,22 +2225,63 @@ local function bindCamera()
 			smoothedCameraForward = flat
 			smoothedCameraPos = targetFocus - flat * 34 + Vector3.new(0, 14, 0)
 		else
-			local alpha = 1 - math.exp(-CAMERA_FOLLOW_SPEED * dt)
-			smoothedCameraFocus = smoothedCameraFocus:Lerp(targetFocus, alpha)
-			local blendedForward = smoothedCameraForward:Lerp(flat, alpha)
+			local followAlpha = PresentationMath.alpha(LabConfig.CameraFollowRate, dt)
+			local headingAlpha = PresentationMath.alpha(LabConfig.CameraHeadingFollowRate, dt)
+			local horizontalFocus = smoothedCameraFocus:Lerp(targetFocus, followAlpha)
+			smoothedCameraFocus = Vector3.new(
+				horizontalFocus.X,
+				PresentationMath.approach(smoothedCameraFocus.Y, targetFocus.Y, LabConfig.CameraVerticalFollowRate, dt),
+				horizontalFocus.Z
+			)
+			local blendedForward = smoothedCameraForward:Lerp(flat, headingAlpha)
 			smoothedCameraForward = if blendedForward.Magnitude > 0.001 then blendedForward.Unit else flat
 			local desired = smoothedCameraFocus - smoothedCameraForward * 34 + Vector3.new(0, 14, 0)
-			if (smoothedCameraPos - desired).Magnitude > CAMERA_SNAP_DISTANCE then
+			if (smoothedCameraPos - desired).Magnitude > LabConfig.CameraSnapDistance then
 				smoothedCameraPos = desired
 			else
-				smoothedCameraPos = smoothedCameraPos:Lerp(desired, alpha)
+				local horizontalCamera = smoothedCameraPos:Lerp(desired, followAlpha)
+				smoothedCameraPos = Vector3.new(
+					horizontalCamera.X,
+					PresentationMath.approach(smoothedCameraPos.Y, desired.Y, LabConfig.CameraVerticalFollowRate, dt),
+					horizontalCamera.Z
+				)
 			end
 		end
-		camera.CFrame = CFrame.lookAt(smoothedCameraPos, smoothedCameraFocus)
 
-		local speed = if motion
-			then math.abs(velocity:Dot(flat))
-			else (if previousReplicatedPos and dt > 1e-4 then correctionDistance / dt else 0)
+		local speed = math.abs(velocity:Dot(flat))
+		local surface = if latest then latest.roadSurface else "Road"
+		local feedbackTarget = if latest and latest.phase == "Run"
+			then CameraFeedback.target(speed, surface, suspensionEnergy, gradeDeg, LabConfig)
+			else 0
+		local feedbackRate = if feedbackTarget > cameraShakeIntensity
+			then LabConfig.CameraShakeAttackRate
+			else LabConfig.CameraShakeReleaseRate
+		cameraShakeIntensity = PresentationMath.approach(cameraShakeIntensity, feedbackTarget, feedbackRate, dt)
+
+		if motion and motion.sample.t ~= lastMotionTime then
+			lastMotionTime = motion.sample.t
+			if latest and latest.phase == "Run" then
+				cameraImpactKick = math.max(cameraImpactKick, CameraFeedback.impact(motion.acceleration, LabConfig))
+			end
+		end
+		cameraImpactKick *= math.exp(-LabConfig.CameraImpactDecay * dt)
+
+		local clock = os.clock()
+		local frequency = LabConfig.CameraShakeFrequency
+		local noiseX = math.noise(clock * frequency, 3.1, 7.7) * 2
+		local noiseY = math.noise(clock * frequency * 1.13, 11.9, 2.3) * 2
+		local noiseRoll = math.noise(clock * frequency * 0.83, 19.7, 5.1) * 2
+		local impactWave = math.sin(clock * frequency * 2.4) * cameraImpactKick
+		local translation = cameraShakeIntensity * LabConfig.CameraShakeMaxTranslation
+		local rotation = math.rad(cameraShakeIntensity * LabConfig.CameraShakeMaxRotationDeg)
+		local impactTranslation = impactWave * LabConfig.CameraImpactTranslation
+		local impactRotation = math.rad(impactWave * LabConfig.CameraImpactRotationDeg)
+
+		local baseCamera = CFrame.lookAt(smoothedCameraPos, smoothedCameraFocus)
+		camera.CFrame = baseCamera
+			* CFrame.new(noiseX * translation * 0.45, noiseY * translation + impactTranslation, 0)
+			* CFrame.Angles(noiseY * rotation + impactRotation, 0, noiseRoll * rotation)
+
 		local targetFov = 68 + math.clamp(speed / LabConfig.MaxForwardSpeed, 0, 1) * 18
 		camera.FieldOfView += (targetFov - camera.FieldOfView) * math.min(1, dt * 4)
 	end)

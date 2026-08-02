@@ -107,7 +107,7 @@ function LabSession.new(config: Config)
 		recordsBeaten = {},
 
 		-- Coalesced client flush targets 60 Hz on changed axes; burst covers edges.
-		driveLimiter = RateLimiter.new(40, 60),
+		driveLimiter = RateLimiter.new(45, 60),
 		actionLimiter = RateLimiter.new(8, 12),
 
 		snapshotAccumulator = 0,

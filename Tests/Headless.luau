@@ -73,6 +73,7 @@ local Commerce = loadShared("Commerce")
 local ImpactTiers = loadShared("ImpactTiers")
 local VfxSpec = loadShared("VfxSpec")
 local PresentationMath = loadShared("PresentationMath")
+local CameraFeedback = loadShared("CameraFeedback")
 local CrewRotation = loadShared("CrewRotation")
 local LabProgression = loadShared("LabProgression")
 local LabRespawnPolicy = loadShared("LabRespawnPolicy")
@@ -111,6 +112,51 @@ check("development profile keeps the Studio tuning workflow", function()
 	local development = BuildProfiles.get("Development")
 	assert(development.ShowDebugOverlay and development.LiveTuning, "Studio tooling should be available")
 	assert(#BuildProfiles.releaseSafetyIssues(development) > 0, "Development must not masquerade as release")
+end)
+
+--[[
+	A seated driver has to fit inside the cab.
+
+	Roblox seats a character with its HumanoidRootPart at the weld offset; the
+	top of an R15 head sits roughly three studs above that, and hats and tall
+	hair go higher again. The old cab cleared it by almost nothing, so anything
+	on the character's head came through the roof.
+]]
+check("a seated driver fits inside the cab, hair included", function()
+	local cabCentreY = LabConfig.CabOffset.Y
+	local cabTopY = cabCentreY + LabConfig.CabSize.Y * 0.5
+	local seatY = LabConfig.DriverSeatOffset.Y
+
+	-- Head top, plus room for an accessory. Deliberately generous: the failure
+	-- this guards against is only ever visible to other players.
+	local headroomNeeded = 3.6
+	assert(
+		seatY + headroomNeeded < cabTopY,
+		string.format("A seated driver reaches %.2f but the cab roof is at %.2f", seatY + headroomNeeded, cabTopY)
+	)
+
+	-- Grown about its centre on purpose. If the centre ever moves, the cab's
+	-- contribution to the centre of mass moves with it and the handling tuning
+	-- silently stops describing this truck.
+	-- Compared with a tolerance because Vector3 stores 32-bit components, so a
+	-- literal written as 3.8 does not read back equal to the double 3.8.
+	assert(math.abs(cabCentreY - 3.8) < 1e-4, "The cab centre moved; grip and rollover tuning assumed it stays put")
+
+	-- The extra depth is meant to hide inside the chassis rather than show as a
+	-- skirt below the body.
+	local cabBottomY = cabCentreY - LabConfig.CabSize.Y * 0.5
+	local chassisTopY = LabConfig.ChassisSize.Y * 0.5
+	assert(cabBottomY < chassisTopY, "The cab base now hangs below the chassis instead of inside it")
+end)
+
+check("the windshield stays on the cab's front face", function()
+	local halfDepth = LabConfig.CabSize.Z * 0.5
+	assert(
+		math.abs(LabConfig.WindshieldOffset.Z) >= halfDepth,
+		"The windshield sank into the cab instead of sitting on its face"
+	)
+	local top = LabConfig.WindshieldOffset.Y + LabConfig.WindshieldSize.Y * 0.5
+	assert(top < LabConfig.CabSize.Y * 0.5, "The windshield pokes through the cab roof")
 end)
 
 check("one server is exactly one four-player crew", function()
@@ -960,6 +1006,34 @@ end)
 check("presentation smoothing ignores invalid time", function()
 	assert(PresentationMath.approach(20, 80, 10, 0) == 20, "Zero dt must not change the value")
 	assert(PresentationMath.approach(20, 80, 0, 1) == 20, "Zero rate must not change the value")
+end)
+
+check("camera road feedback is quiet below its speed ramp", function()
+	assert(LabConfig.CameraShakeSpeedFull > LabConfig.CameraShakeSpeedStart, "Camera speed ramp is inverted")
+	assert(LabConfig.CameraImpactAccelFull > LabConfig.CameraImpactAccelStart, "Camera impact ramp is inverted")
+	assert(LabConfig.CameraMotionStaleSeconds > LabConfig.CameraLeadSeconds, "Motion would expire before its lead cap")
+	local amount = CameraFeedback.target(
+		LabConfig.CameraShakeSpeedStart - 1,
+		"Rough",
+		LabConfig.CameraShakeSuspensionFull,
+		LabConfig.CameraShakeGradeFullDeg,
+		LabConfig
+	)
+	assert(amount == 0, "A parked or crawling truck should not inherit full road shake")
+end)
+
+check("camera feedback rises with speed and surface severity", function()
+	local midSpeed = (LabConfig.CameraShakeSpeedStart + LabConfig.CameraShakeSpeedFull) * 0.5
+	local slow = CameraFeedback.target(midSpeed, "Road", 0, 0, LabConfig)
+	local rough = CameraFeedback.target(midSpeed, "Rough", 0, 0, LabConfig)
+	local fast = CameraFeedback.target(LabConfig.CameraShakeSpeedFull, "Rough", 0, 0, LabConfig)
+	assert(rough > slow, "Rough road must read more strongly than asphalt")
+	assert(fast > rough, "The same rough road must ramp with speed")
+end)
+
+check("camera impact kick is bounded and thresholded", function()
+	assert(CameraFeedback.impact(LabConfig.CameraImpactAccelStart - 1, LabConfig) == 0, "Small motion became an impact")
+	assert(CameraFeedback.impact(LabConfig.CameraImpactAccelFull + 1, LabConfig) == 1, "Heavy impact did not saturate")
 end)
 
 -- ---------------------------------------------------------- crew rotation
