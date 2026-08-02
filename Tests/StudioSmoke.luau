@@ -135,6 +135,31 @@ local function checkFunTest()
 	local TruckLab = require(server:WaitForChild("TruckLab"))
 	local session = TruckLab.getSession()
 	assert(session and session.runVariant, "Live session has no run variation card")
+	local activeRouteId = lab:GetAttribute("ActiveRouteId")
+	assert(typeof(activeRouteId) == "string", "Lab world has no active route id")
+	local activeRoute = lab:FindFirstChild("Route_" .. activeRouteId)
+	assert(activeRoute, "Active route folder is missing")
+	assert(activeRoute == session.route.root, "Client-visible active route and session route disagree")
+	local enabledSpawns = 0
+	for index, route in session.routes do
+		assert(route.root.Parent == lab, "Route " .. route.id .. " is outside the shared world root")
+		assert(
+			route.root:GetAttribute("Active") == (route == session.route),
+			"Route active flag disagrees with session"
+		)
+		local spawn = route.root:FindFirstChild("LabSpawn")
+		assert(spawn and spawn:IsA("SpawnLocation"), "Route " .. route.id .. " has no spawn")
+		if spawn.Enabled then
+			enabledSpawns += 1
+			assert(index == session:currentLeg(), "The enabled spawn belongs to an inactive leg")
+		end
+		local start = route.points[1]
+		assert(
+			(Vector3.new(route.startCFrame.Position.X, start.Y, route.startCFrame.Position.Z) - start).Magnitude < 10,
+			"Route " .. route.id .. " starts away from its own first node"
+		)
+	end
+	assert(enabledSpawns == 1, "Exactly one route spawn must be enabled")
 	assert(session.runVariant.cargo.label ~= "", "Run cargo has no player-facing label")
 	assert(session.runVariant.contract.brief ~= "", "Run contract has no player-facing brief")
 
@@ -151,8 +176,8 @@ local function checkFunTest()
 	local features = session.route.features
 	assert(features and #features > 0, "The live route detected no features at all")
 	assert(
-		RouteFeatures.countOf(features, RouteFeatures.Kind.Corner) >= 3,
-		"The route has three authored corners; detection found "
+		RouteFeatures.countOf(features, RouteFeatures.Kind.Corner) >= 2,
+		"The route needs at least two authored corners; detection found "
 			.. RouteFeatures.countOf(features, RouteFeatures.Kind.Corner)
 	)
 	assert(RouteFeatures.countOf(features, RouteFeatures.Kind.Descent) >= 1, "The long descent was not detected")
@@ -162,7 +187,7 @@ local function checkFunTest()
 	local firstCorner = RouteFeatures.firstOf(features, RouteFeatures.Kind.Corner)
 	assert(firstCorner, "The route reports no first corner for the opener to aim at")
 	assert(
-		firstCorner < 0.2,
+		firstCorner < 0.35,
 		string.format("The first corner moved to %.3f; the opener fires before it and would now be late", firstCorner)
 	)
 
@@ -171,7 +196,9 @@ local function checkFunTest()
 	local bridgeStart = RouteFeatures.firstOf(features, RouteFeatures.Kind.Bridge)
 	local descentStart = RouteFeatures.firstOf(features, RouteFeatures.Kind.Descent)
 	assert(bridgeStart and descentStart, "Route is missing a bridge or a descent")
-	assert(descentStart < bridgeStart, "The descent should come before the bridge on this route")
+	if session.route.id == "Foothills" then
+		assert(descentStart < bridgeStart, "The Foothills descent should come before its bridge")
+	end
 	local player = Players:GetPlayers()[1]
 	if player and session.phase == "Staging" then
 		local snapshot = session:buildSnapshotFor(player)
@@ -183,7 +210,7 @@ local function checkFunTest()
 		end
 	end
 
-	local truck = lab:WaitForChild("LabTruck", 5)
+	local truck = activeRoute:WaitForChild("LabTruck", 5)
 	assert(truck, "Lab truck was not built")
 
 	local chassis = truck:FindFirstChild("Chassis")
@@ -240,7 +267,7 @@ local function checkFunTest()
 	-- Collision ribbon ----------------------------------------------------
 	local roads = {}
 	local bumps = {}
-	for _, child in lab:GetChildren() do
+	for _, child in activeRoute:GetChildren() do
 		if child:IsA("BasePart") and child.Name == "Road" then
 			table.insert(roads, child)
 		elseif child:IsA("BasePart") and child.Name == "Bump" then
@@ -274,13 +301,13 @@ local function checkFunTest()
 			)
 		end
 	end
-	local staging = lab:FindFirstChild("StagingPad")
+	local staging = activeRoute:FindFirstChild("StagingPad")
 	assert(staging and staging:IsA("BasePart"), "Staging pad missing")
 	local stagingTop = staging.Position.Y + staging.Size.Y * 0.5
 	local firstRoadTop = roads[1].Position.Y + roads[1].Size.Y * 0.5
 	assert(math.abs(stagingTop - firstRoadTop) < 0.01, "Staging pad and first road have a collision lip")
 
-	local dressing = lab:FindFirstChild("RoadsideDressing")
+	local dressing = activeRoute:FindFirstChild("RoadsideDressing")
 	assert(dressing and dressing:IsA("Folder"), "Roadside dressing was not built")
 	assert(dressing:FindFirstChild("ReceivingWarehouse"), "Depot receiving warehouse is missing")
 	assert(dressing:FindFirstChild("EdgePost"), "Route has no reflective edge posts")
@@ -299,7 +326,7 @@ local function checkFunTest()
 	end
 	assert(ropes == #LabConfig.StrapOrder, "Expected one rope per strap, found " .. tostring(ropes))
 
-	local swapSigns = lab:FindFirstChild("SwapSigns")
+	local swapSigns = activeRoute:FindFirstChild("SwapSigns")
 	assert(swapSigns, "SWAP signs were not built")
 	local signsVisible = swapSigns:GetAttribute("VisibleForCrew")
 	assert(typeof(signsVisible) == "boolean", "SWAP signs must expose their crew visibility state")
@@ -339,7 +366,7 @@ local function checkFunTest()
 		"Parked truck should be at rest, moving at " .. tostring(chassis.AssemblyLinearVelocity.Magnitude)
 	)
 
-	local ride = restY - (lab:FindFirstChild("StagingPad") and lab.StagingPad.Position.Y or 0)
+	local ride = restY - (activeRoute:FindFirstChild("StagingPad") and activeRoute.StagingPad.Position.Y or 0)
 	assert(ride > 1, "Truck sank into the ground; suspension is under-sprung (ride " .. tostring(ride) .. ")")
 
 	-- The crate should still be on the bed and roughly where it started.

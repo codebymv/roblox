@@ -50,6 +50,9 @@ function DailyProgressionService.claim(player: Player, today: number, objective)
 	PlayerDataService.update(player, function(data)
 		data.dailyContractDay = today
 		data.credits += math.max(0, objective.bonus)
+		-- The count the livery ladder is derived from. Cumulative and never
+		-- reset: the collection is the one thing a bad run cannot take away.
+		data.dailyWins += 1
 	end)
 	return true
 end

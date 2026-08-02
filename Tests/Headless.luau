@@ -115,6 +115,7 @@ local AudioIds = loadShared("AudioIds")
 local Achievements = loadShared("Achievements")
 local AudioMix = loadShared("AudioMix")
 local Commerce = loadShared("Commerce")
+local Cosmetics = loadShared("Cosmetics")
 local DailyContract = loadShared("DailyContract")
 local ImpactTiers = loadShared("ImpactTiers")
 local VfxSpec = loadShared("VfxSpec")
@@ -806,6 +807,40 @@ check("every leg is a real road with the features difficulty needs", function()
 	end
 end)
 
+check("every leg stages on its own road and owns its landmarks", function()
+	for _, route in LabRoute.Routes do
+		local nodes = LabRoute.nodes(route.id)
+		local start = nodes[1].position
+		local startFrame = RouteSections.startFrame(nodes, 3.2, 6)
+		local horizontalStart = Vector3.new(startFrame.Position.X, start.Y, startFrame.Position.Z)
+		assert(math.abs((horizontalStart - start).Magnitude - 6) < 0.01, route.id .. " staging is not behind its start")
+
+		local seenLandmark = {}
+		for _, landmark in route.landmarks do
+			assert(not seenLandmark[landmark.name], route.id .. " repeats landmark " .. landmark.name)
+			seenLandmark[landmark.name] = true
+			local nearest = math.huge
+			for index = 1, #nodes - 1 do
+				local a = nodes[index].position
+				local segment = nodes[index + 1].position - a
+				local lengthSquared = segment:Dot(segment)
+				local alpha = if lengthSquared > 0.001
+					then math.clamp((landmark.at - a):Dot(segment) / lengthSquared, 0, 1)
+					else 0
+				nearest = math.min(nearest, (landmark.at - (a + segment * alpha)).Magnitude)
+			end
+			assert(nearest < 150, route.id .. " landmark " .. landmark.name .. " is off its road")
+		end
+		assert(seenLandmark.Start and seenLandmark.Depot, route.id .. " cannot be warped from start to depot")
+
+		for _, warning in route.warnings do
+			assert(warning.progress > 0 and warning.progress < 1, route.id .. " dressing warning is outside the run")
+			assert(warning.side == -1 or warning.side == 1, route.id .. " warning has no roadside")
+			assert(warning.text ~= "", route.id .. " warning has no copy")
+		end
+	end
+end)
+
 check("no two legs share a road or a patch of world", function()
 	local seenId = {}
 	local seenSkin = {}
@@ -813,6 +848,9 @@ check("no two legs share a road or a patch of world", function()
 		assert(not seenId[route.id], "Duplicate route id: " .. route.id)
 		seenId[route.id] = true
 		seenSkin[route.skin] = (seenSkin[route.skin] or 0) + 1
+	end
+	for skin, count in seenSkin do
+		assert(count == 1, "Multiple legs share the " .. skin .. " skin without an authored variation")
 	end
 
 	-- Both routes exist in the same world at once, so their geometry must not
@@ -866,11 +904,11 @@ check("leg two is harder than leg one in the ways it claims", function()
 	end
 
 	assert(surfaceCount(pass, "Ice") > 0, "The Pass has no ice, which is its whole surface hazard")
+	assert(surfaceCount(pass, "Snow") > 0, "The Pass promises deep snow but never surfaces it")
 	assert(surfaceCount(foothills, "Ice") == 0, "Ice leaked onto the teaching route")
 
-	local _, _, passSurfaces, passTotal = RouteSections.measure(pass)
-	local _, passCumulative = RouteSections.measure(pass)
-	local passFeatures = RouteFeatures.detect((RouteSections.measure(pass)), passCumulative, passSurfaces, passTotal)
+	local passPoints, passCumulative, passSurfaces, passTotal = RouteSections.measure(pass)
+	local passFeatures = RouteFeatures.detect(passPoints, passCumulative, passSurfaces, passTotal)
 	assert(RouteFeatures.countOf(passFeatures, "Bridge") >= 2, "The Pass was meant to have two crossings")
 
 	assert(averageWidth(pass) < averageWidth(foothills), "The Pass is not tighter than the Foothills")
@@ -1108,6 +1146,141 @@ check("every daily is worth taking a detour for", function()
 	end
 end)
 
+-- --------------------------------------------------------------- collection
+
+--[[
+	The rule the whole two-axis design rests on: money changes how a shape
+	looks, never which shapes exist. A player who never spends can own every
+	livery by showing up.
+
+	The existing cosmetic-only check does not cover this. It asks whether a
+	product confers advantage, and a livery confers none -- it would pass while
+	being exactly the thing that must not happen.
+]]
+check("money never gates a pattern", function()
+	for _, product in Commerce.Catalog do
+		assert(product.grant.kind ~= "Livery", product.key .. " sells a livery")
+		if product.grant.kind == "Finish" then
+			local finish = Cosmetics.finish(product.grant.finishId)
+			assert(finish, product.key .. " grants a finish that does not exist")
+		end
+	end
+
+	-- Every livery is reachable by playing, and none of them costs anything.
+	for _, livery in Cosmetics.Liveries do
+		assert(livery.dailyWins >= 0, livery.id .. " has a negative requirement")
+		assert((livery :: any).cost == nil, livery.id .. " has a price, and liveries are not for sale")
+	end
+end)
+
+--[[
+	Nothing is random. Every unlock states its requirement and meeting it grants
+	the item. A paid randomised reward is a loot box, and the cosmetic-only
+	allowlist would happily pass one, so this is its own rule.
+]]
+check("every unlock is deterministic and stated up front", function()
+	for _, livery in Cosmetics.Liveries do
+		assert(typeof(livery.dailyWins) == "number", livery.id .. " has no stated requirement")
+		assert((livery :: any).chance == nil, livery.id .. " unlocks by chance")
+		assert(livery.blurb ~= "" and livery.label ~= "", livery.id .. " is missing its copy")
+	end
+	for _, finish in Cosmetics.Finishes do
+		assert((finish :: any).chance == nil, finish.id .. " unlocks by chance")
+		-- Priced in credits or sold for Robux, never both and never neither.
+		assert(
+			(finish.cost > 0) ~= finish.premium or (finish.cost == 0 and not finish.premium),
+			finish.id .. " has an ambiguous price"
+		)
+		assert(finish.blurb ~= "" and finish.label ~= "", finish.id .. " is missing its copy")
+	end
+end)
+
+check("the livery ladder starts reachable and always climbs", function()
+	local liveries = Cosmetics.Liveries
+	assert(liveries[1].dailyWins == 0, "The first livery is not free")
+	assert(liveries[1].id == Cosmetics.DefaultLivery, "The default livery is not the free one")
+
+	for index = 2, #liveries do
+		assert(
+			liveries[index].dailyWins > liveries[index - 1].dailyWins,
+			liveries[index].id .. " does not come after the one before it"
+		)
+	end
+
+	-- The first earned livery is one win away, so the mechanism is felt on the
+	-- first day rather than described and then withheld.
+	assert(liveries[2].dailyWins == 1, "The first earned livery is more than one daily away")
+end)
+
+check("ownership follows the win count, and the next unlock is always nameable", function()
+	assert(Cosmetics.ownsLivery("Plain", 0), "The free livery is not owned at zero wins")
+	assert(not Cosmetics.ownsLivery("Flames", 0), "A livery was owned before it was earned")
+	assert(Cosmetics.ownsLivery("Flames", 1), "One win did not unlock the first earned livery")
+	assert(Cosmetics.ownsLivery("Flames", 500), "A big win count lost an earlier livery")
+	assert(not Cosmetics.ownsLivery("NotALivery", 500), "An unknown livery was owned")
+	assert(not Cosmetics.ownsLivery(nil, 500), "A missing livery was owned")
+
+	assert(#Cosmetics.unlockedLiveries(0) == 1, "A new profile owns more than the default")
+	assert(#Cosmetics.unlockedLiveries(10000) == #Cosmetics.Liveries, "A veteran does not own the whole set")
+
+	local nextUp, away = Cosmetics.nextLivery(0)
+	assert(nextUp and nextUp.id == "Flames" and away == 1, "The first target is wrong")
+
+	-- The grid needs to say something in its empty slots right up until there
+	-- are none, and then say nothing rather than crash.
+	local none, zero = Cosmetics.nextLivery(10000)
+	assert(none == nil and zero == 0, "A complete collection still reported a target")
+end)
+
+check("finishes are owned only once bought, except the free one", function()
+	local unlocked = {}
+	assert(Cosmetics.ownsFinish("Matte", unlocked), "The free finish is not owned by default")
+	assert(not Cosmetics.ownsFinish("Gold", unlocked), "A paid finish was owned for free")
+	assert(not Cosmetics.ownsFinish("Holographic", unlocked), "The premium finish was owned for free")
+
+	unlocked.Gold = true
+	assert(Cosmetics.ownsFinish("Gold", unlocked), "A bought finish is not owned")
+	assert(not Cosmetics.ownsFinish("NotAFinish", unlocked), "An unknown finish was owned")
+end)
+
+--[[
+	Cosmetics are the last thing that should be able to break a run, so a
+	profile naming something it cannot have renders the default rather than
+	nothing.
+]]
+check("an impossible loadout falls back instead of failing", function()
+	local livery, finish = Cosmetics.resolve("Skulls", "Gold", 0, {})
+	assert(livery.id == Cosmetics.DefaultLivery, "An unearned livery was rendered")
+	assert(finish.id == Cosmetics.DefaultFinish, "An unowned finish was rendered")
+
+	livery, finish = Cosmetics.resolve(nil, nil, 0, {})
+	assert(livery.id == Cosmetics.DefaultLivery and finish.id == Cosmetics.DefaultFinish, "Nil loadout did not default")
+
+	livery, finish = Cosmetics.resolve("Nonsense", "Nonsense", 10000, { Gold = true })
+	assert(
+		livery.id == Cosmetics.DefaultLivery and finish.id == Cosmetics.DefaultFinish,
+		"Junk loadout did not default"
+	)
+
+	-- A legitimate pairing survives, and the two axes stay independent: any
+	-- owned finish goes with any owned livery.
+	livery, finish = Cosmetics.resolve("Flames", "Gold", 1, { Gold = true })
+	assert(livery.id == "Flames" and finish.id == "Gold", "A valid loadout was rejected")
+end)
+
+check("collection progress counts both axes", function()
+	local owned, total = Cosmetics.progress(0, {})
+	assert(total == #Cosmetics.Liveries + #Cosmetics.Finishes, "The grid does not cover both axes")
+	assert(owned == 2, "A new profile does not start with exactly the two free items")
+
+	local complete = {}
+	for _, finish in Cosmetics.Finishes do
+		complete[finish.id] = true
+	end
+	local full = Cosmetics.progress(10000, complete)
+	assert(full == total, "A complete collection does not read as complete")
+end)
+
 -- ------------------------------------------------------------------ commerce
 
 --[[
@@ -1162,6 +1335,65 @@ check("the catalogue is internally consistent", function()
 	end
 	assert(Commerce.byKey(nil) == nil, "A missing key resolved to a product")
 	assert(Commerce.byKey("NotAProduct") == nil, "An unknown key resolved to a product")
+end)
+
+--[[
+	Grant application is what a receipt actually does, and it was the least
+	tested code in the project despite being the most expensive to get wrong.
+	Now that it is pure, the allowlist and the handlers can be checked against
+	each other: a kind added to one without the other fails here rather than
+	warning into the log after somebody has paid.
+]]
+check("every grant kind the catalogue allows can actually be granted", function()
+	local function blankProfile()
+		return { credits = 0, unlockedPaints = {}, unlockedFinishes = {} }
+	end
+
+	-- One representative grant per allowed kind. If a kind is added to the
+	-- allowlist, it has to be added here too, which is the reminder.
+	local samples = {
+		Credits = { kind = "Credits", amount = 100 },
+		Paint = { kind = "Paint", paintId = "Prototype" },
+		Finish = { kind = "Finish", finishId = "Holographic" },
+	}
+
+	for kind in Commerce.CosmeticGrants do
+		local sample = samples[kind]
+		assert(sample, "No sample grant for allowed kind: " .. kind)
+		assert(Commerce.applyGrant(blankProfile(), sample), kind .. " is allowed but cannot be granted")
+	end
+
+	-- Every product in the catalogue grants something real.
+	for _, product in Commerce.Catalog do
+		assert(Commerce.applyGrant(blankProfile(), product.grant), product.key .. " grants nothing")
+	end
+end)
+
+check("a grant that names nothing real is refused, not silently skipped", function()
+	local function blankProfile()
+		return { credits = 0, unlockedPaints = {}, unlockedFinishes = {} }
+	end
+
+	assert(not Commerce.applyGrant(blankProfile(), { kind = "Nonsense" }), "An unknown kind was granted")
+	assert(
+		not Commerce.applyGrant(blankProfile(), { kind = "Paint", paintId = "NotAPaint" }),
+		"A fake paint was granted"
+	)
+	assert(
+		not Commerce.applyGrant(blankProfile(), { kind = "Finish", finishId = "NotAFinish" }),
+		"A fake finish was granted"
+	)
+	assert(
+		not Commerce.applyGrant(blankProfile(), { kind = "Credits", amount = 0 }),
+		"A zero-credit grant reported success"
+	)
+	assert(not Commerce.applyGrant(blankProfile(), { kind = "Paint" }), "A paint grant with no paint was granted")
+
+	-- Refusal has to mean nothing moved, or a failed grant still costs the
+	-- player the receipt.
+	local profile = blankProfile()
+	Commerce.applyGrant(profile, { kind = "Credits", amount = -50 })
+	assert(profile.credits == 0, "A negative grant moved the balance")
 end)
 
 --[[
@@ -1536,6 +1768,14 @@ check("camera feedback rises with speed and surface severity", function()
 	local fast = CameraFeedback.target(LabConfig.CameraShakeSpeedFull, "Rough", 0, 0, LabConfig)
 	assert(rough > slow, "Rough road must read more strongly than asphalt")
 	assert(fast > rough, "The same rough road must ramp with speed")
+end)
+
+check("alpine camera feedback distinguishes ice from snow", function()
+	local ice = CameraFeedback.surfaceAmount("Ice", LabConfig)
+	local road = CameraFeedback.surfaceAmount("Road", LabConfig)
+	local snow = CameraFeedback.surfaceAmount("Snow", LabConfig)
+	assert(ice < road, "Ice should glide more quietly than asphalt")
+	assert(snow > road, "Snow should read more strongly than asphalt")
 end)
 
 check("camera impact kick is bounded and thresholded", function()

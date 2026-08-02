@@ -16,6 +16,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local LabConfig = require(Shared:WaitForChild("LabConfig"))
 
 local LabMotionState = require(script.Parent:WaitForChild("LabMotionState"))
+local RigLocator = require(script.Parent:WaitForChild("RigLocator"))
 
 local WHEEL_IDS = { "FL", "FR", "RL", "RR" }
 local POSITION_RATE = 24
@@ -57,9 +58,8 @@ local function cloneVisualPart(source: BasePart, name: string, parent: Instance)
 end
 
 local function findRig(): (Model?, BasePart?)
-	local root = Workspace:FindFirstChild("CargoLab")
-	local truck = root and root:FindFirstChild("LabTruck")
-	if not truck or not truck:IsA("Model") then
+	local truck = RigLocator.truck()
+	if not truck then
 		return nil, nil
 	end
 	local chassis = truck:FindFirstChild("Chassis")

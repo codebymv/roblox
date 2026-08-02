@@ -28,7 +28,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Commerce = require(Shared:WaitForChild("Commerce"))
-local TruckPaints = require(Shared:WaitForChild("TruckPaints"))
 
 local LabProgressionService = require(script.Parent.LabProgressionService)
 local PlayerDataService = require(script.Parent.PlayerDataService)
@@ -43,26 +42,6 @@ local passOwnership: { [number]: { [string]: boolean } } = {}
 
 local function log(message: string)
 	print("[CargoCommerce] " .. message)
-end
-
-local function applyGrant(profile, grant)
-	if grant.kind == "Credits" then
-		profile.credits = math.max(0, profile.credits + math.max(0, grant.amount or 0))
-		return
-	end
-
-	if grant.kind == "Paint" then
-		local paintId = grant.paintId
-		if paintId == nil or not TruckPaints.getPaint(paintId) then
-			return
-		end
-		profile.unlockedPaints[paintId] = true
-		return
-	end
-
-	-- Commerce.CosmeticGrants is the allowlist and the headless suite holds it,
-	-- so reaching here means a grant kind was added without a handler.
-	warn("[CargoCommerce] No handler for grant kind: " .. tostring(grant.kind))
 end
 
 local function processReceipt(info): Enum.ProductPurchaseDecision
@@ -118,7 +97,7 @@ local function processReceipt(info): Enum.ProductPurchaseDecision
 		if alreadyGranted then
 			return
 		end
-		applyGrant(data, product.grant)
+		Commerce.applyGrant(data, product.grant)
 		Commerce.appendReceipt(data.grantedReceipts, purchaseId)
 	end)
 	if not committed then
@@ -177,7 +156,7 @@ function CommerceService.syncPasses(player: Player)
 	for _, product in Commerce.Catalog do
 		if product.kind == "Pass" and Commerce.isConfigured(product) and ownsPass(player, product) then
 			PlayerDataService.update(player, function(data)
-				applyGrant(data, product.grant)
+				Commerce.applyGrant(data, product.grant)
 			end)
 			LabProgressionService.invalidatePaints(player)
 		end

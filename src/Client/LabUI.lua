@@ -31,6 +31,7 @@ local RunCauses = require(Shared:WaitForChild("RunCauses"))
 
 local DeviceInput = require(script.Parent.DeviceInput)
 local LabMotionState = require(script.Parent.LabMotionState)
+local RigLocator = require(script.Parent.RigLocator)
 local UIKit = require(script.Parent.UIKit)
 
 local LabUI = {}
@@ -2318,10 +2319,7 @@ local function findChassis(): BasePart?
 		return cached
 	end
 
-	local root = Workspace:FindFirstChild("CargoLab")
-	local truck = root and root:FindFirstChild("LabTruck")
-	local chassis = truck and truck:FindFirstChild("Chassis")
-	cachedChassis = if chassis and chassis:IsA("BasePart") then chassis else nil
+	cachedChassis = RigLocator.chassis()
 	return cachedChassis
 end
 

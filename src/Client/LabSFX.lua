@@ -20,7 +20,6 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local SoundService = game:GetService("SoundService")
-local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local AudioIds = require(Shared:WaitForChild("AudioIds"))
@@ -31,6 +30,7 @@ local LabTypes = require(Shared:WaitForChild("LabTypes"))
 local Net = require(Shared:WaitForChild("Net"))
 
 local AudioBus = require(script.Parent:WaitForChild("AudioBus"))
+local RigLocator = require(script.Parent:WaitForChild("RigLocator"))
 
 local LabSFX = {}
 local SFX_IDS: { [string]: string } = AudioIds.Sfx
@@ -78,9 +78,7 @@ local function makeSound(name: string, id: string, group: SoundGroup, looped: bo
 end
 
 local function findPart(name: string): BasePart?
-	local root = Workspace:FindFirstChild("CargoLab")
-	local found = root and root:FindFirstChild(name, true)
-	return if found and found:IsA("BasePart") then found else nil
+	return RigLocator.part(name)
 end
 
 local function localCharacterPart(): BasePart?
@@ -303,7 +301,7 @@ function LabSFX.mount()
 		local speedMix = math.clamp(speed / 42, 0, 1)
 		local moving = snap.phase == "Run" and math.clamp(speed / 8, 0, 1) or 0
 		local surface = snap.roadSurface
-		local offroad = surface == "Shoulder" or surface == "Grass"
+		local offroad = surface == "Shoulder" or surface == "Grass" or surface == "Snow"
 		local rough = surface == "Rough"
 		local bridge = surface == "Bridge"
 

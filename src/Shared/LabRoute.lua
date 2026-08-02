@@ -200,6 +200,7 @@ local PASS_PLAN: { RouteSections.Step } = {
 		control = Vector3.new(6440, -62, 2320),
 		at = Vector3.new(6360, -58, 2400),
 		width = 22,
+		surface = "Snow",
 		bankDeg = 5,
 		steps = 12,
 	},
@@ -208,6 +209,7 @@ local PASS_PLAN: { RouteSections.Step } = {
 		control = Vector3.new(6280, -54, 2480),
 		at = Vector3.new(6360, -50, 2560),
 		width = 22,
+		surface = "Snow",
 		bankDeg = -5,
 		steps = 12,
 	},
@@ -224,6 +226,17 @@ local PASS_PLAN: { RouteSections.Step } = {
 	{ kind = Point, at = Vector3.new(6400, -25, 3120), width = 30 },
 }
 
+export type Landmark = {
+	name: string,
+	at: Vector3,
+}
+
+export type DressingWarning = {
+	progress: number,
+	side: number,
+	text: string,
+}
+
 export type Route = {
 	id: string,
 	label: string,
@@ -232,8 +245,10 @@ export type Route = {
 	-- third route can be this one in a different season.
 	skin: string,
 	plan: { RouteSections.Step },
-	-- Named for the landmark and the warp targets that still point at it.
 	cornerPosition: Vector3,
+	cornerSign: string,
+	landmarks: { Landmark },
+	warnings: { DressingWarning },
 }
 
 --[[
@@ -248,6 +263,24 @@ local ROUTES: { Route } = {
 		skin = "Temperate",
 		plan = PLAN,
 		cornerPosition = Vector3.new(0, 0, 420),
+		cornerSign = "BLIND\nRIGHT",
+		landmarks = {
+			{ name = "Start", at = Vector3.new(0, 0, 0) },
+			{ name = "CornerApproach", at = Vector3.new(0, 0, 290) },
+			{ name = "BlindRight", at = Vector3.new(0, 0, 420) },
+			{ name = "Descent", at = Vector3.new(430, -12, 644) },
+			{ name = "Rough", at = Vector3.new(1320, -128, 822) },
+			{ name = "LeftBend", at = Vector3.new(1700, -136, 1120) },
+			{ name = "Bridge", at = Vector3.new(1700, -136, 1182) },
+			{ name = "Climb", at = Vector3.new(1622, -102, 1700) },
+			{ name = "SBends", at = Vector3.new(1784, -88, 1902) },
+			{ name = "Depot", at = Vector3.new(1962, -106, 2620) },
+		},
+		warnings = {
+			{ progress = 0.37, side = -1, text = "ROUGH\nROAD" },
+			{ progress = 0.55, side = 1, text = "BRIDGE\nAHEAD" },
+			{ progress = 0.82, side = -1, text = "S-BENDS" },
+		},
 	},
 	{
 		id = "ThePass",
@@ -256,6 +289,27 @@ local ROUTES: { Route } = {
 		skin = "Alpine",
 		plan = PASS_PLAN,
 		cornerPosition = Vector3.new(6120, -6, 340),
+		cornerSign = "SWITCHBACK",
+		landmarks = {
+			{ name = "Start", at = Vector3.new(6000, 0, 0) },
+			{ name = "CornerApproach", at = Vector3.new(6000, 0, 210) },
+			{ name = "Switchback", at = Vector3.new(6120, -6, 340) },
+			{ name = "Ice", at = Vector3.new(6260, -18, 650) },
+			{ name = "Climb", at = Vector3.new(6260, -8, 1120) },
+			{ name = "FirstBridge", at = Vector3.new(6260, 14, 1300) },
+			{ name = "IceTraverse", at = Vector3.new(6260, -2, 1620) },
+			{ name = "SecondBridge", at = Vector3.new(6420, -62, 1960) },
+			{ name = "SnowChicane", at = Vector3.new(6440, -62, 2320) },
+			{ name = "RoughShelf", at = Vector3.new(6400, -30, 2800) },
+			{ name = "Depot", at = Vector3.new(6400, -25, 3120) },
+		},
+		warnings = {
+			{ progress = 0.16, side = -1, text = "ICE\nAHEAD" },
+			{ progress = 0.38, side = 1, text = "BRIDGE\nONE" },
+			{ progress = 0.58, side = -1, text = "ICY\nDESCENT" },
+			{ progress = 0.72, side = 1, text = "BRIDGE\nTWO" },
+			{ progress = 0.82, side = -1, text = "DEEP\nSNOW" },
+		},
 	},
 }
 
@@ -263,10 +317,6 @@ local LabRoute = {}
 
 LabRoute.Routes = ROUTES
 LabRoute.Plan = PLAN
-
--- Where the blind right-hander is, for the landmark and the warp targets that
--- still name it directly.
-LabRoute.CornerPosition = ROUTES[1].cornerPosition
 
 -- A leg past the last authored route repeats the hardest one rather than
 -- ending the session. Running out of road should not be a failure state.

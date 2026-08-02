@@ -384,6 +384,13 @@ local LANDMARK_WARNING = {
 	Bridge = "Narrow bridge ahead. No shoulders.",
 	Climb = "Climb ahead. A dragging load will cost you here.",
 	SBends = "S-bends ahead. An already-shifted load becomes a second crisis.",
+	Switchback = "Switchback ahead. The second turn comes before the load settles.",
+	Ice = "Ice ahead. Braking distance just changed.",
+	FirstBridge = "First crossing ahead. Keep the truck centred.",
+	IceTraverse = "Icy descent ahead. Slow down before gravity chooses for you.",
+	SecondBridge = "Second crossing ahead. You will enter it carrying speed.",
+	SnowChicane = "Deep-snow chicane ahead. The verge will drag you wide.",
+	RoughShelf = "Rough shelf ahead. Get the straps ready.",
 }
 
 local LANDMARK_APPROACH = 0.045

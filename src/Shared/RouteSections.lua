@@ -79,6 +79,8 @@ local function appendCurve(nodes: { RouteNode }, step: Step)
 	local control = step.control or from
 	local count = math.max(1, math.floor(step.steps or 12))
 	local bank = step.bankDeg or 0
+	local surface = step.surface or "Road"
+	local shoulders = if step.shoulders == nil then true else step.shoulders
 
 	for index = 1, count do
 		local alpha = index / count
@@ -87,7 +89,7 @@ local function appendCurve(nodes: { RouteNode }, step: Step)
 		-- Camber eases in and out instead of changing the collision normal by
 		-- three degrees at each end of every authored curve.
 		local curveBank = bank * math.sin(math.pi * alpha)
-		table.insert(nodes, node(quadratic(from, control, step.at, alpha), width, "Road", curveBank, true))
+		table.insert(nodes, node(quadratic(from, control, step.at, alpha), width, surface, curveBank, shoulders))
 	end
 end
 
@@ -175,6 +177,19 @@ function RouteSections.measure(nodes: { RouteNode }): ({ Vector3 }, { number }, 
 	end
 
 	return points, cumulative, surfaces, math.max(total, 1)
+end
+
+-- A route-local staging transform. WorldBuilder uses the same calculation for
+-- the truck, pad and spawn, while headless tests can prove a route authored
+-- away from the origin also starts away from the origin.
+function RouteSections.startFrame(nodes: { RouteNode }, height: number, backOffset: number): CFrame
+	assert(#nodes >= 2, "A route needs two nodes to establish its starting direction")
+	local start = nodes[1].position
+	local delta = nodes[2].position - start
+	local forward = Vector3.new(delta.X, 0, delta.Z)
+	forward = if forward.Magnitude > 0.001 then forward.Unit else Vector3.new(0, 0, 1)
+	local position = start + Vector3.new(0, height, 0) - forward * math.max(0, backOffset)
+	return CFrame.lookAt(position, position + forward)
 end
 
 return RouteSections

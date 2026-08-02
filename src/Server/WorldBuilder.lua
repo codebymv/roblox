@@ -1,11 +1,11 @@
 --!strict
 
 --[[
-	Builds the depot hub and one parallel route lane per bay.
+	Builds every authored delivery leg under one CargoLab world root.
 
-	The hub deliberately sits between the spawn and every bay pad, so a player
-	walking to their own rig always passes the other crews' pads and the board.
-	That foot traffic is the point.
+	Routes remain standing so a leg transition only moves the live rig; each
+	route owns its staging yard, collision ribbon, dressing and destination.
+	The shared root carries the active route id used by client presentation.
 ]]
 
 local Workspace = game:GetService("Workspace")
@@ -50,7 +50,7 @@ local function makeDecorPart(
 	return part
 end
 
-local function makePine(parent: Instance, base: Vector3, scale: number)
+local function makePine(parent: Instance, base: Vector3, scale: number, skin: string)
 	local trunkHeight = 5.5 * scale
 	local trunk = makeDecorPart(
 		"PineTrunk",
@@ -69,11 +69,25 @@ local function makePine(parent: Instance, base: Vector3, scale: number)
 			"PineCrown",
 			Vector3.new(radius * 1.7, radius, radius * 1.7),
 			CFrame.new(base + Vector3.new(0, trunkHeight * 0.55 + tier * 1.6 * scale, 0)),
-			if tier == 1 then Color3.fromRGB(43, 78, 51) else Color3.fromRGB(50, 92, 58),
+			if skin == "Alpine"
+				then Color3.fromRGB(38, 65, 58)
+				elseif tier == 1 then Color3.fromRGB(43, 78, 51)
+				else Color3.fromRGB(50, 92, 58),
 			Enum.Material.Grass,
 			parent
 		)
 		crown.Shape = Enum.PartType.Ball
+		if skin == "Alpine" then
+			local cap = makeDecorPart(
+				"PineSnow",
+				Vector3.new(radius * 1.45, radius * 0.28, radius * 1.45),
+				crown.CFrame * CFrame.new(0, radius * 0.34, 0),
+				Color3.fromRGB(232, 240, 245),
+				Enum.Material.Snow,
+				parent
+			)
+			cap.Shape = Enum.PartType.Ball
+		end
 	end
 end
 
@@ -150,7 +164,31 @@ local LAB_SIGN_HEIGHT = 5
 
 type RouteNode = RouteSections.RouteNode
 
-local function buildRoadSegment(folder: Folder, dressing: Folder, from: RouteNode, to: RouteNode, segmentIndex: number)
+export type LabRouteInfo = RouteMath.Route & {
+	id: string,
+	label: string,
+	blurb: string,
+	skin: string,
+	root: Folder,
+	startCFrame: CFrame,
+	deliveryPosition: Vector3,
+	deliveryPad: BasePart,
+	cornerPosition: Vector3,
+	features: { RouteFeatures.Feature },
+	landmarks: { { name: string, progress: number } },
+	swapGates: { number },
+	swapSigns: Folder,
+	warnings: { LabRoute.DressingWarning },
+}
+
+local function buildRoadSegment(
+	folder: Folder,
+	dressing: Folder,
+	from: RouteNode,
+	to: RouteNode,
+	segmentIndex: number,
+	skin: string
+)
 	local delta = to.position - from.position
 	local length = delta.Magnitude
 	if length < 0.05 then
@@ -167,11 +205,11 @@ local function buildRoadSegment(folder: Folder, dressing: Folder, from: RouteNod
 			"Shoulder",
 			Vector3.new(width + 10, 1, length + 2),
 			orientation * CFrame.new(0, -0.15, 0),
-			Color3.fromRGB(86, 108, 70),
+			if skin == "Alpine" then Color3.fromRGB(216, 228, 236) else Color3.fromRGB(86, 108, 70),
 			folder
 		)
-		shoulder.Material = Enum.Material.Grass
-		shoulder:SetAttribute("LabSurface", "Shoulder")
+		shoulder.Material = if skin == "Alpine" then Enum.Material.Snow else Enum.Material.Grass
+		shoulder:SetAttribute("LabSurface", if skin == "Alpine" then "Snow" else "Shoulder")
 		shoulder:SetAttribute("RouteSegmentIndex", segmentIndex)
 	end
 
@@ -182,12 +220,16 @@ local function buildRoadSegment(folder: Folder, dressing: Folder, from: RouteNod
 		if to.surface == "Bridge"
 			then Color3.fromRGB(96, 84, 66)
 			elseif to.surface == "Rough" then Color3.fromRGB(74, 68, 58)
+			elseif to.surface == "Ice" then Color3.fromRGB(168, 202, 219)
+			elseif to.surface == "Snow" then Color3.fromRGB(224, 233, 239)
 			else Color3.fromRGB(58, 61, 68),
 		folder
 	)
 	road.Material = if to.surface == "Bridge"
 		then Enum.Material.WoodPlanks
 		elseif to.surface == "Rough" then Enum.Material.Ground
+		elseif to.surface == "Ice" then Enum.Material.Ice
+		elseif to.surface == "Snow" then Enum.Material.Snow
 		else Enum.Material.Asphalt
 	road:SetAttribute("LabSurface", to.surface)
 	road:SetAttribute("RouteSegmentIndex", segmentIndex)
@@ -337,7 +379,7 @@ local function buildRouteDressing(dressing: Folder, route: LabRouteInfo)
 	}
 	for _, spec in treeSpecs do
 		local centre, _, right = flatRouteAxes(route, spec[1])
-		makePine(dressing, centre.Position + right * spec[2] * spec[3] + Vector3.new(0, 0.6, 0), spec[4])
+		makePine(dressing, centre.Position + right * spec[2] * spec[3] + Vector3.new(0, 0.6, 0), spec[4], route.skin)
 	end
 
 	for _, spec in { { 0.12, 1, 22 }, { 0.42, -1, 18 }, { 0.86, 1, 17 } } do
@@ -345,13 +387,7 @@ local function buildRouteDressing(dressing: Folder, route: LabRouteInfo)
 		makeRockCluster(dressing, centre.Position + right * spec[2] * spec[3] + Vector3.new(0, 0.5, 0), 1)
 	end
 
-	for _, warning in
-		{
-			{ progress = 0.37, side = -1, text = "ROUGH\nROAD" },
-			{ progress = 0.55, side = 1, text = "BRIDGE\nAHEAD" },
-			{ progress = 0.82, side = -1, text = "S-BENDS" },
-		}
-	do
+	for _, warning in route.warnings do
 		local centre, forward, right = flatRouteAxes(route, warning.progress)
 		local position = centre.Position + right * warning.side * 18 + Vector3.new(0, 5.5, 0)
 		makePostedSign(
@@ -364,15 +400,22 @@ local function buildRouteDressing(dressing: Folder, route: LabRouteInfo)
 		)
 	end
 
-	-- Staging yard props frame the truck without adding collision around spawn.
-	makeFloodlight(dressing, Vector3.new(-24, 0.6, -30))
-	makeFloodlight(dressing, Vector3.new(24, 0.6, -30))
+	-- Staging yard props are route-local. World-axis positions put the Alpine
+	-- yard back at the Foothills whenever a route was authored off-origin.
+	local startCentre, startForward, startRight = flatRouteAxes(route, 0)
+	local yardBase = startCentre.Position - startForward * 30 + Vector3.new(0, 0.6, 0)
+	makeFloodlight(dressing, yardBase - startRight * 24)
+	makeFloodlight(dressing, yardBase + startRight * 24)
 	for _, side in { -1, 1 } do
 		for index = 1, 3 do
+			local along = -8 + index * 4
 			makeDecorPart(
 				"YardBarrier",
 				Vector3.new(3.8, 1.2, 1.2),
-				CFrame.new(side * 25, 1.2, -8 + index * 4),
+				CFrame.lookAt(
+					startCentre.Position + startRight * side * 25 + startForward * along + Vector3.new(0, 1.2, 0),
+					startCentre.Position + startRight * side * 25 + startForward * (along + 1) + Vector3.new(0, 1.2, 0)
+				),
 				if index % 2 == 0 then Color3.fromRGB(235, 235, 225) else Color3.fromRGB(220, 105, 45),
 				Enum.Material.Concrete,
 				dressing
@@ -393,7 +436,7 @@ local function buildRouteDressing(dressing: Folder, route: LabRouteInfo)
 		"Warehouse",
 		Vector3.new(48, 20, 58),
 		buildingCF,
-		Color3.fromRGB(104, 110, 116),
+		if route.skin == "Alpine" then Color3.fromRGB(82, 94, 106) else Color3.fromRGB(104, 110, 116),
 		Enum.Material.Metal,
 		warehouse
 	)
@@ -401,7 +444,7 @@ local function buildRouteDressing(dressing: Folder, route: LabRouteInfo)
 		"WarehouseRoof",
 		Vector3.new(52, 1.1, 62),
 		buildingCF * CFrame.new(0, 10.3, 0),
-		Color3.fromRGB(54, 59, 66),
+		if route.skin == "Alpine" then Color3.fromRGB(220, 230, 237) else Color3.fromRGB(54, 59, 66),
 		Enum.Material.Metal,
 		warehouse
 	)
@@ -440,38 +483,52 @@ end
 	Workspace.CargoLab, so the roads may live in separate folders but the
 	folders have to live in one place.
 ]]
-local function buildLabRoute(parent: Folder, definition): LabRouteInfo
+local function buildLabRoute(parent: Folder, definition: LabRoute.Route): LabRouteInfo
 	local root = Instance.new("Folder")
 	root.Name = "Route_" .. definition.id
 	root.Parent = parent
 
 	local nodes = LabRoute.nodes(definition.id)
+	local startCFrame = RouteSections.startFrame(nodes, LAB_TRUCK_RIDE_HEIGHT, 6)
+	local startPosition = nodes[1].position
+	local startForward = startCFrame.LookVector
 	local dressing = Instance.new("Folder")
 	dressing.Name = "RoadsideDressing"
 	dressing.Parent = root
 
-	local staging =
-		makePart("StagingPad", Vector3.new(60, 1.2, 46), CFrame.new(0, 0, -22), Color3.fromRGB(48, 50, 58), root)
+	local stagingPosition = startPosition - startForward * 22
+	local staging = makePart(
+		"StagingPad",
+		Vector3.new(60, 1.2, 46),
+		CFrame.lookAt(stagingPosition, stagingPosition + startForward),
+		if definition.skin == "Alpine" then Color3.fromRGB(58, 66, 76) else Color3.fromRGB(48, 50, 58),
+		root
+	)
 	staging.Material = Enum.Material.Concrete
 	staging:SetAttribute("LabSurface", "Road")
 
 	local spawn = Instance.new("SpawnLocation")
 	spawn.Name = "LabSpawn"
 	spawn.Size = Vector3.new(16, 1, 16)
-	spawn.CFrame = CFrame.new(0, 1.1, -36) * CFrame.Angles(0, math.pi, 0)
+	local spawnPosition = startPosition - startForward * 36 + Vector3.new(0, 1.1, 0)
+	spawn.CFrame = CFrame.lookAt(spawnPosition, spawnPosition + startForward)
 	spawn.Anchored = true
 	spawn.Neutral = true
 	spawn.Transparency = 0.4
-	spawn.Color = Color3.fromRGB(230, 230, 230)
+	spawn.Color = if definition.skin == "Alpine" then Color3.fromRGB(210, 228, 240) else Color3.fromRGB(230, 230, 230)
 	spawn.Parent = root
 
 	for index = 1, #nodes - 1 do
-		buildRoadSegment(root, dressing, nodes[index], nodes[index + 1], index)
+		buildRoadSegment(root, dressing, nodes[index], nodes[index + 1], index, definition.skin)
 	end
 
 	local points, cumulative, surfaces, total = RouteSections.measure(nodes)
 
 	local deliveryPosition = nodes[#nodes].position
+	local endDelta = nodes[#nodes].position - nodes[#nodes - 1].position
+	local endForward = Vector3.new(endDelta.X, 0, endDelta.Z)
+	endForward = if endForward.Magnitude > 0.001 then endForward.Unit else Vector3.new(0, 0, 1)
+	local deliveryFrame = CFrame.lookAt(deliveryPosition, deliveryPosition + endForward)
 
 	--[[
 		Runoff past the depot. Overshooting is a normal outcome of arriving with
@@ -481,7 +538,7 @@ local function buildLabRoute(parent: Folder, definition): LabRouteInfo
 	local apron = makePart(
 		"DepotApron",
 		Vector3.new(120, 1.2, 110),
-		CFrame.new(deliveryPosition + Vector3.new(0, 0, 42)),
+		CFrame.lookAt(deliveryPosition + endForward * 42, deliveryPosition + endForward * 43),
 		Color3.fromRGB(52, 55, 62),
 		root
 	)
@@ -491,7 +548,7 @@ local function buildLabRoute(parent: Folder, definition): LabRouteInfo
 	local deliveryPad = makePart(
 		"DeliveryPad",
 		Vector3.new(38, 0.4, 26),
-		CFrame.new(deliveryPosition + Vector3.new(0, 0.9, 0)),
+		deliveryFrame + Vector3.new(0, 0.9, 0),
 		Color3.fromRGB(62, 108, 168),
 		root
 	)
@@ -501,7 +558,10 @@ local function buildLabRoute(parent: Folder, definition): LabRouteInfo
 	deliveryPad.Material = Enum.Material.Concrete
 	makePostedSign(
 		root,
-		CFrame.new(deliveryPosition + Vector3.new(-22, 5.5, -6)) * CFrame.Angles(0, math.rad(55), 0),
+		CFrame.lookAt(
+			deliveryPosition - deliveryFrame.RightVector * 22 - endForward * 6 + Vector3.new(0, 5.5, 0),
+			deliveryPosition + endForward * 8 + Vector3.new(0, 5.5, 0)
+		),
 		"DROP THE\nLOAD HERE",
 		Color3.fromRGB(200, 235, 255),
 		24,
@@ -509,13 +569,6 @@ local function buildLabRoute(parent: Folder, definition): LabRouteInfo
 	)
 
 	local cornerPosition = definition.cornerPosition
-	makePostedSign(
-		root,
-		CFrame.new(cornerPosition + Vector3.new(-24, 5.5, -40)) * CFrame.Angles(0, math.rad(35), 0),
-		"BLIND\nRIGHT",
-		Color3.fromRGB(255, 220, 120),
-		24
-	)
 	local swapSigns = Instance.new("Folder")
 	swapSigns.Name = "SwapSigns"
 	swapSigns.Parent = root
@@ -529,15 +582,10 @@ local function buildLabRoute(parent: Folder, definition): LabRouteInfo
 		points = points,
 		cumulative = cumulative,
 		totalLength = math.max(total, 1),
-		startCFrame = CFrame.lookAt(
-			Vector3.new(0, LAB_TRUCK_RIDE_HEIGHT, -6),
-			Vector3.new(0, LAB_TRUCK_RIDE_HEIGHT, 20)
-		),
+		startCFrame = startCFrame,
 		deliveryPosition = deliveryPosition,
 		deliveryPad = deliveryPad,
 		cornerPosition = cornerPosition,
-		bridgePosition = Vector3.new(1700, -136, 1190),
-		descentPosition = Vector3.new(430, -12, 644),
 		--[[
 			Corners, descents and bridges, read off the geometry above rather
 			than written down beside it. PressureDirector weights its events by
@@ -548,8 +596,20 @@ local function buildLabRoute(parent: Folder, definition): LabRouteInfo
 		landmarks = {},
 		swapGates = {},
 		swapSigns = swapSigns,
+		warnings = definition.warnings,
 	}
 	buildRouteDressing(dressing, route)
+
+	local cornerProgress = RouteMath.progress(route, cornerPosition)
+	local cornerCentre, cornerForward, cornerRight = flatRouteAxes(route, cornerProgress)
+	local cornerSignPosition = cornerCentre.Position - cornerRight * 24 - cornerForward * 40 + Vector3.new(0, 5.5, 0)
+	makePostedSign(
+		root,
+		CFrame.lookAt(cornerSignPosition, cornerSignPosition + cornerForward),
+		definition.cornerSign,
+		Color3.fromRGB(255, 220, 120),
+		24
+	)
 
 	-- Red signs make the forced handoff legible before the HUD says anything.
 	-- Each pair faces back up the route so the Driver and bed crew see the same
@@ -587,19 +647,7 @@ local function buildLabRoute(parent: Folder, definition): LabRouteInfo
 		Each is placed a little before the feature it names, so warping there
 		gives you the approach rather than dropping you mid-event.
 	]]
-	local markers: { { name: string, at: Vector3 } } = {
-		{ name = "Start", at = nodes[1].position },
-		{ name = "CornerApproach", at = LabRoute.CornerPosition - Vector3.new(0, 0, 130) },
-		{ name = "BlindRight", at = cornerPosition },
-		{ name = "Descent", at = Vector3.new(430, -12, 644) },
-		{ name = "Rough", at = Vector3.new(1320, -128, 822) },
-		{ name = "LeftBend", at = Vector3.new(1700, -136, 1120) },
-		{ name = "Bridge", at = Vector3.new(1700, -136, 1182) },
-		{ name = "Climb", at = Vector3.new(1622, -102, 1700) },
-		{ name = "SBends", at = Vector3.new(1784, -88, 1902) },
-		{ name = "Depot", at = deliveryPosition },
-	}
-	for _, marker in markers do
+	for _, marker in definition.landmarks do
 		table.insert(route.landmarks, {
 			name = marker.name,
 			progress = WorldBuilder.labProgress(route, marker.at),
@@ -663,6 +711,11 @@ end
 	accepting spawns.
 ]]
 function WorldBuilder.setRouteActive(route: LabRouteInfo, active: boolean)
+	route.root:SetAttribute("Active", active)
+	local worldRoot = route.root.Parent
+	if active and worldRoot then
+		worldRoot:SetAttribute("ActiveRouteId", route.id)
+	end
 	local spawn = route.root:FindFirstChild("LabSpawn")
 	if spawn and spawn:IsA("SpawnLocation") then
 		spawn.Enabled = active

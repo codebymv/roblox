@@ -18,7 +18,6 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local ImpactTiers = require(Shared:WaitForChild("ImpactTiers"))
@@ -28,6 +27,7 @@ local LabTypes = require(Shared:WaitForChild("LabTypes"))
 local Net = require(Shared:WaitForChild("Net"))
 local RunCauses = require(Shared:WaitForChild("RunCauses"))
 local VfxSpec = require(Shared:WaitForChild("VfxSpec"))
+local RigLocator = require(script.Parent:WaitForChild("RigLocator"))
 
 local LabVfx = {}
 
@@ -93,9 +93,7 @@ local function makeAnchor(parent: BasePart, name: string, offset: Vector3): Atta
 end
 
 local function findPart(name: string): BasePart?
-	local root = Workspace:FindFirstChild("CargoLab")
-	local found = root and root:FindFirstChild(name, true)
-	return if found and found:IsA("BasePart") then found else nil
+	return RigLocator.part(name)
 end
 
 function LabVfx.mount()

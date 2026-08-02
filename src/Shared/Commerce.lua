@@ -23,6 +23,9 @@
 	headless suite fails if one appears.
 ]]
 
+local Cosmetics = require(script.Parent.Cosmetics)
+local TruckPaints = require(script.Parent.TruckPaints)
+
 local Commerce = {}
 
 -- Grant kinds that are allowed to exist. Adding to this list is a deliberate
@@ -30,6 +33,10 @@ local Commerce = {}
 local COSMETIC_GRANTS = {
 	Credits = true,
 	Paint = true,
+	-- A finish is how an owned shape looks. Liveries are deliberately absent
+	-- and the suite enforces it: money may change the material, never the
+	-- pattern, so a player who never spends can still own every shape.
+	Finish = true,
 }
 
 Commerce.CosmeticGrants = COSMETIC_GRANTS
@@ -40,6 +47,8 @@ export type Grant = {
 	amount: number?,
 	-- Paint grants. Must name an id in TruckPaints.
 	paintId: string?,
+	-- Finish grants. Must name an id in Cosmetics.
+	finishId: string?,
 }
 
 export type Product = {
@@ -64,6 +73,14 @@ local CATALOG: { Product } = {
 		label = "Cargo Cash",
 		description = "A stack of Cargo Cash toward cab paint.",
 		grant = { kind = "Credits", amount = 1200 },
+	},
+	{
+		key = "HolographicFinish",
+		assetId = 0,
+		kind = "Pass",
+		label = "Holographic Finish",
+		description = "A finish that never settles on a colour. Works with every livery you own.",
+		grant = { kind = "Finish", finishId = "Holographic" },
 	},
 	{
 		key = "SupporterPack",
@@ -128,6 +145,55 @@ function Commerce.byAssetId(assetId: number?, kind: string): Product?
 		end
 	end
 	return nil
+end
+
+--[[
+	Give a profile what a product grants.
+
+	Pure, and here rather than in CommerceService, because this is the most
+	correctness-critical code in the project and it was the least testable. It
+	is what a receipt actually does, it runs inside a DataStore transform, and
+	getting it wrong takes real money for nothing.
+
+	Returns whether anything was granted. An unknown grant kind, or one naming a
+	cosmetic that does not exist, is refused rather than silently ignored: the
+	caller needs to know not to confirm the sale.
+]]
+function Commerce.applyGrant(profile, grant: Grant): boolean
+	if not COSMETIC_GRANTS[grant.kind] then
+		return false
+	end
+
+	if grant.kind == "Credits" then
+		local amount = math.max(0, grant.amount or 0)
+		if amount <= 0 then
+			return false
+		end
+		profile.credits = math.max(0, profile.credits + amount)
+		return true
+	end
+
+	if grant.kind == "Paint" then
+		local paintId = grant.paintId
+		if paintId == nil or not TruckPaints.getPaint(paintId) then
+			return false
+		end
+		profile.unlockedPaints[paintId] = true
+		return true
+	end
+
+	if grant.kind == "Finish" then
+		local finishId = grant.finishId
+		if finishId == nil or not Cosmetics.finish(finishId) then
+			return false
+		end
+		profile.unlockedFinishes[finishId] = true
+		return true
+	end
+
+	-- Reachable only by adding a kind to the allowlist without a branch here,
+	-- which the headless suite exists to catch.
+	return false
 end
 
 function Commerce.hasReceipt(history: { string }, purchaseId: string): boolean

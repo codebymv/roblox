@@ -50,6 +50,16 @@ export type ProfileData = {
 	},
 	-- Badge keys already awarded, so a repeat run does not re-query Roblox.
 	awardedBadges: { [string]: boolean },
+
+	--[[
+		The collection. Liveries are not listed because ownership is derived
+		from dailyWins -- see Cosmetics -- so the only thing worth storing is
+		how many dailies have been won and what is currently equipped.
+	]]
+	dailyWins: number,
+	equippedLivery: string,
+	unlockedFinishes: { [string]: boolean },
+	equippedFinish: string,
 }
 
 return {}

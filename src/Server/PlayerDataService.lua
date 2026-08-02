@@ -70,6 +70,10 @@ local function defaultProfile(): Types.ProfileData
 			bestDeliveryStreak = 0,
 		},
 		awardedBadges = {},
+		dailyWins = 0,
+		equippedLivery = "Plain",
+		unlockedFinishes = {},
+		equippedFinish = "Matte",
 	}
 end
 
@@ -185,6 +189,7 @@ local function saveEntry(userId: number, entry: Entry, insideTransaction: boolea
 	snapshot.grantedReceipts = table.clone(entry.data.grantedReceipts)
 	snapshot.labRecords = table.clone(entry.data.labRecords)
 	snapshot.awardedBadges = table.clone(entry.data.awardedBadges)
+	snapshot.unlockedFinishes = table.clone(entry.data.unlockedFinishes)
 	entry.saving = true
 	local ok, err = pcall(function()
 		dataStore:UpdateAsync(keyFor(userId), function()

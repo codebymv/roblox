@@ -24,6 +24,10 @@ function CameraFeedback.surfaceAmount(surface: string, config: any): number
 		return math.max(0, config.CameraShakeShoulder)
 	elseif surface == "Bridge" then
 		return math.max(0, config.CameraShakeBridge)
+	elseif surface == "Ice" then
+		return math.max(0, config.CameraShakeIce)
+	elseif surface == "Snow" then
+		return math.max(0, config.CameraShakeSnow)
 	end
 	return math.max(0, config.CameraShakeRoad)
 end
