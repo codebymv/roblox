@@ -17,6 +17,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local LabConfig = require(Shared:WaitForChild("LabConfig"))
+local RouteFeatures = require(Shared:WaitForChild("RouteFeatures"))
 
 local PressureDirector = {}
 PressureDirector.__index = PressureDirector
@@ -24,37 +25,24 @@ PressureDirector.__index = PressureDirector
 local WHEELS = { "FL", "FR", "RL", "RR" }
 
 --[[
-	Stretches of route where a given category lands hardest, as fractions of the
-	arc length built in WorldBuilder.buildLabNodes. Weakening a strap on a
-	straight is nearly free; weakening one two seconds before a corner is the
-	whole game.
+	Where a category lands hardest now comes from the route.
+
+	These used to be literal fractions -- 0.06 to 0.19 for the first corner --
+	measured off one specific road. Weakening a strap on a straight is nearly
+	free and weakening one two seconds before a corner is the whole game, so
+	getting the locations wrong does not break anything visibly; it just makes
+	every failure feel arbitrary. A second route would have inherited the first
+	route's map of itself.
 ]]
-local CORNER_WINDOWS = { { 0.06, 0.19 }, { 0.51, 0.60 }, { 0.72, 0.88 } }
--- Mechanical hits land after the crest, not as the truck tips over it.
-local DESCENT_WINDOW = { 0.30, 0.48 }
-local BRIDGE_WINDOW = { 0.56, 0.70 }
 -- After the scripted corner setup, refuse a random event for at least this long
 -- so it cannot stack on top of the blind right.
 local CORNER_SETUP_MIN_GAP = 22
 -- Late-run intervals shrink toward this fraction of the base range.
 local INTERVAL_PROGRESS_SCALE = 0.35
 
--- Progress at which the scripted opener adds the second half of its setup,
--- placed just short of the blind right-hander.
-local CORNER_SETUP_PROGRESS = 0.075
-
-local function inWindow(progress: number, window): boolean
-	return progress >= window[1] and progress <= window[2]
-end
-
-local function nearCorner(progress: number): boolean
-	for _, window in CORNER_WINDOWS do
-		if inWindow(progress, window) then
-			return true
-		end
-	end
-	return false
-end
+-- Fallback for the opener when a route has no corner at all, which no real
+-- route should, but a test fixture or a stripped route might.
+local CORNER_SETUP_FALLBACK = 0.075
 
 local function pick(rng: Random, range: NumberRange): number
 	return rng:NextNumber(range.Min, range.Max)
@@ -65,11 +53,15 @@ local function nextInterval(rng: Random, progress: number, intervalScale: number
 	return interval * (1 - INTERVAL_PROGRESS_SCALE * math.clamp(progress, 0, 1)) * intervalScale
 end
 
-function PressureDirector.new(chassisRig, cargoLoad, onEvent)
+function PressureDirector.new(chassisRig, cargoLoad, onEvent, features)
+	local resolved = features or {}
 	return setmetatable({
 		chassisRig = chassisRig,
 		cargoLoad = cargoLoad,
 		onEvent = onEvent,
+		features = resolved,
+		-- Placed just short of the route's first corner, wherever that is.
+		cornerSetupProgress = RouteFeatures.firstOf(resolved, RouteFeatures.Kind.Corner) or CORNER_SETUP_FALLBACK,
 		rng = Random.new(),
 		elapsed = 0,
 		nextEventAt = LabConfig.PressureFirstEventSeconds,
@@ -81,6 +73,12 @@ function PressureDirector.new(chassisRig, cargoLoad, onEvent)
 		intervalScale = 1,
 		pressureScale = 1,
 	}, PressureDirector)
+end
+
+-- Terrain lookup. A route with no features of a kind simply never weights that
+-- category, which is the correct behaviour for a road that has no bridge.
+function PressureDirector:_inFeature(progress: number, kind): boolean
+	return RouteFeatures.inKind(self.features, progress, kind)
 end
 
 function PressureDirector:configure(difficulty)
@@ -144,7 +142,7 @@ function PressureDirector:_cargoPressure(progress: number)
 		two straps worth watching, not to guarantee a break before the driver
 		has had a chance to do anything about it.
 	]]
-	if nearCorner(progress) then
+	if self:_inFeature(progress, RouteFeatures.Kind.Corner) then
 		for _, id in { "FR", "RR", "FL", "RL" } do
 			local strap = self.cargoLoad:getStrap(id)
 			if strap and not strap.broken and strap.health > LabConfig.StrapMaxHealth * 0.6 then
@@ -167,7 +165,7 @@ end
 function PressureDirector:_mechanicalPressure(progress: number)
 	if self.rng:NextNumber() < 0.62 then
 		local wheel = WHEELS[self.rng:NextInteger(1, #WHEELS)]
-		if inWindow(progress, DESCENT_WINDOW) then
+		if self:_inFeature(progress, RouteFeatures.Kind.Descent) then
 			-- On the descent the front carries the load, so hurt the front.
 			wheel = if self.rng:NextNumber() > 0.5 then "FL" else "FR"
 		end
@@ -190,7 +188,7 @@ function PressureDirector:_environmentalPressure(progress: number)
 		return false
 	end
 	local magnitude = pick(self.rng, LabConfig.GustAccel) * self.pressureScale
-	if inWindow(progress, BRIDGE_WINDOW) then
+	if self:_inFeature(progress, RouteFeatures.Kind.Bridge) then
 		magnitude *= 1.35
 	end
 	local direction = if self.rng:NextNumber() > 0.5 then 1 else -1
@@ -203,11 +201,11 @@ end
 function PressureDirector:_fire(progress: number)
 	-- Weight the categories by where the truck is, then avoid repeating.
 	local weights = { Cargo = 3, Mechanical = 2, Environmental = 2 }
-	if nearCorner(progress) then
+	if self:_inFeature(progress, RouteFeatures.Kind.Corner) then
 		weights.Cargo = 6
-	elseif inWindow(progress, DESCENT_WINDOW) then
+	elseif self:_inFeature(progress, RouteFeatures.Kind.Descent) then
 		weights.Mechanical = 5
-	elseif inWindow(progress, BRIDGE_WINDOW) then
+	elseif self:_inFeature(progress, RouteFeatures.Kind.Bridge) then
 		weights.Environmental = 6
 	end
 	weights[self.lastCategory] = math.max(1, (weights[self.lastCategory] or 2) - 2)
@@ -256,7 +254,7 @@ function PressureDirector:step(dt: number, progress: number)
 		corner, so the corner has something to find. The outcome is still open:
 		brake early and it holds, carry speed and it does not.
 	]]
-	if not self.firedCornerSetup and progress >= CORNER_SETUP_PROGRESS then
+	if not self.firedCornerSetup and progress >= self.cornerSetupProgress then
 		self.firedCornerSetup = true
 		self:_cargoPressure(progress)
 		self.nextEventAt = self.elapsed

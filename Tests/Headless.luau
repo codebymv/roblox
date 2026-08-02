@@ -80,6 +80,7 @@ local LabProgression = loadShared("LabProgression")
 local LabRespawnPolicy = loadShared("LabRespawnPolicy")
 local LabRigPolicy = loadShared("LabRigPolicy")
 local RunVariants = loadShared("RunVariants")
+local RouteFeatures = loadShared("RouteFeatures")
 local RouteMath = loadShared("RouteMath")
 local RunCauses = loadShared("RunCauses")
 local TokenBucket = loadShared("TokenBucket")
@@ -599,6 +600,133 @@ check("every record the result screen can announce has words", function()
 	local records = Achievements.defaultRecords()
 	for key in records do
 		assert(Achievements.RecordLabel[key], "Record " .. key .. " has no label for the result screen")
+	end
+end)
+
+-- ------------------------------------------------------------ route features
+
+--[[
+	Build a synthetic route from segments so the detector can be pointed at
+	geometry with a known answer. Each segment adds evenly spaced points along a
+	heading, optionally descending, optionally surfaced.
+]]
+local function synthRoute(segments)
+	local points = { Vector3.new(0, 0, 0) }
+	local surfaces = { "Road" }
+	local cumulative = { 0 }
+	local total = 0
+
+	for _, segment in segments do
+		local steps = segment.steps or 8
+		for _ = 1, steps do
+			local last = points[#points]
+			local nextPoint = last + segment.step
+			total += (nextPoint - last).Magnitude
+			table.insert(points, nextPoint)
+			table.insert(surfaces, segment.surface or "Road")
+			table.insert(cumulative, total)
+		end
+	end
+	return points, cumulative, surfaces, math.max(total, 1)
+end
+
+check("a straight flat road has no features at all", function()
+	local points, cumulative, surfaces, total = synthRoute({
+		{ step = Vector3.new(0, 0, 40), steps = 30 },
+	})
+	local features = RouteFeatures.detect(points, cumulative, surfaces, total)
+	assert(#features == 0, "A straight road reported " .. #features .. " features")
+end)
+
+check("a corner is found, and found before it arrives", function()
+	-- Straight, then a sustained right turn, then straight again.
+	local points, cumulative, surfaces, total = synthRoute({
+		{ step = Vector3.new(0, 0, 40), steps = 20 },
+		{ step = Vector3.new(14, 0, 38), steps = 10 },
+		{ step = Vector3.new(40, 0, 0), steps = 20 },
+	})
+	local features = RouteFeatures.detect(points, cumulative, surfaces, total)
+	assert(RouteFeatures.countOf(features, "Corner") >= 1, "The corner was not detected")
+
+	local first = RouteFeatures.firstOf(features, "Corner")
+	assert(first, "The corner has no start")
+	-- The window opens during the approach straight, not inside the turn. This
+	-- is the whole point: pressure applied inside a corner is not a decision.
+	local turnStartProgress = cumulative[21] / total
+	assert(first < turnStartProgress, "The corner window opens after the corner starts")
+end)
+
+check("a descent is found and a climb is not", function()
+	local down = {
+		synthRoute({
+			{ step = Vector3.new(0, 0, 40), steps = 10 },
+			{ step = Vector3.new(0, -6, 40), steps = 12 },
+			{ step = Vector3.new(0, 0, 40), steps = 10 },
+		}),
+	}
+	local features = RouteFeatures.detect(down[1], down[2], down[3], down[4])
+	assert(RouteFeatures.countOf(features, "Descent") >= 1, "The descent was not detected")
+
+	local up = {
+		synthRoute({
+			{ step = Vector3.new(0, 0, 40), steps = 10 },
+			{ step = Vector3.new(0, 6, 40), steps = 12 },
+			{ step = Vector3.new(0, 0, 40), steps = 10 },
+		}),
+	}
+	local climbing = RouteFeatures.detect(up[1], up[2], up[3], up[4])
+	assert(RouteFeatures.countOf(climbing, "Descent") == 0, "A climb was reported as a descent")
+end)
+
+check("a bridge is found from its surface, not its shape", function()
+	local points, cumulative, surfaces, total = synthRoute({
+		{ step = Vector3.new(0, 0, 40), steps = 10 },
+		{ step = Vector3.new(0, 0, 40), steps = 8, surface = "Bridge" },
+		{ step = Vector3.new(0, 0, 40), steps = 10 },
+	})
+	local features = RouteFeatures.detect(points, cumulative, surfaces, total)
+	assert(RouteFeatures.countOf(features, "Bridge") == 1, "The bridge was not detected exactly once")
+	-- Flat and straight, so it must not also read as a corner or a descent.
+	assert(RouteFeatures.countOf(features, "Corner") == 0, "A flat bridge reported a corner")
+	assert(RouteFeatures.countOf(features, "Descent") == 0, "A flat bridge reported a descent")
+end)
+
+check("a route with no bridge simply never weights bridges", function()
+	local points, cumulative, surfaces, total = synthRoute({
+		{ step = Vector3.new(0, 0, 40), steps = 20 },
+	})
+	local features = RouteFeatures.detect(points, cumulative, surfaces, total)
+	assert(not RouteFeatures.inKind(features, 0.5, "Bridge"), "A road with no bridge matched a bridge")
+	assert(RouteFeatures.firstOf(features, "Bridge") == nil, "A road with no bridge reported one")
+end)
+
+check("feature detection survives a degenerate route", function()
+	assert(#RouteFeatures.detect({}, {}, {}, 0) == 0, "An empty route produced features")
+	assert(
+		#RouteFeatures.detect({ Vector3.new(0, 0, 0), Vector3.new(0, 0, 1) }, { 0, 1 }, {}, 1) == 0,
+		"A two-point route produced features"
+	)
+	-- Repeated points have no heading. They must not divide by zero or read as
+	-- an infinitely tight corner.
+	local repeated = { Vector3.new(0, 0, 0), Vector3.new(0, 0, 0), Vector3.new(0, 0, 0), Vector3.new(0, 0, 0) }
+	assert(#RouteFeatures.detect(repeated, { 0, 0, 0, 0 }, {}, 1) == 0, "Stacked points produced a feature")
+end)
+
+check("every feature window is ordered and inside the route", function()
+	local points, cumulative, surfaces, total = synthRoute({
+		{ step = Vector3.new(0, 0, 40), steps = 10 },
+		{ step = Vector3.new(14, -6, 38), steps = 12, surface = "Bridge" },
+		{ step = Vector3.new(40, 0, 0), steps = 10 },
+	})
+	local features = RouteFeatures.detect(points, cumulative, surfaces, total)
+	assert(#features > 0, "The fixture produced no features to check")
+
+	local previousStart = -1
+	for _, feature in features do
+		assert(feature.from >= 0 and feature.to <= 1, feature.kind .. " window escapes the route")
+		assert(feature.to > feature.from, feature.kind .. " window is empty or inverted")
+		assert(feature.from >= previousStart, "Features are not sorted by where they start")
+		previousStart = feature.from
 	end
 end)
 

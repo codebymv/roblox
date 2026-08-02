@@ -168,7 +168,7 @@ function LabSession:_buildRig()
 	self.director = PressureDirector.new(self.chassisRig, self.cargoLoad, function(label: string)
 		self.telemetry:notePressure(label, self.chassisRig:getRouteProgress())
 		self:toast(label)
-	end)
+	end, self.route.features)
 end
 
 function LabSession:_rigPreflightOk(): boolean

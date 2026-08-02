@@ -13,6 +13,7 @@ local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local LabConfig = require(Shared:WaitForChild("LabConfig"))
+local RouteFeatures = require(Shared:WaitForChild("RouteFeatures"))
 local RouteMath = require(Shared:WaitForChild("RouteMath"))
 
 local WorldBuilder = {}
@@ -608,9 +609,12 @@ function WorldBuilder.buildLabRoute(): LabRouteInfo
 
 	local points: { Vector3 } = {}
 	local cumulative: { number } = {}
+	-- Carried out of the node list so the route can find its own bridges.
+	local surfaces: { string } = {}
 	local total = 0
 	for index, entry in nodes do
 		points[index] = entry.position
+		surfaces[index] = entry.surface
 		if index == 1 then
 			cumulative[index] = 0
 		else
@@ -682,6 +686,13 @@ function WorldBuilder.buildLabRoute(): LabRouteInfo
 		cornerPosition = cornerPosition,
 		bridgePosition = Vector3.new(1700, -136, 1190),
 		descentPosition = Vector3.new(430, -12, 644),
+		--[[
+			Corners, descents and bridges, read off the geometry above rather
+			than written down beside it. PressureDirector weights its events by
+			these, and a second route gets the right weighting for free because
+			nobody has to remember to describe it.
+		]]
+		features = RouteFeatures.detect(points, cumulative, surfaces, math.max(total, 1)),
 		landmarks = {},
 		swapGates = {},
 		swapSigns = swapSigns,

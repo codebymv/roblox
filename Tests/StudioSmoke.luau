@@ -34,6 +34,7 @@ local LabRemotes = require(shared:WaitForChild("LabRemotes"))
 local Net = require(shared:WaitForChild("Net"))
 local TruckPaints = require(shared:WaitForChild("TruckPaints"))
 local RunVariants = require(shared:WaitForChild("RunVariants"))
+local RouteFeatures = require(shared:WaitForChild("RouteFeatures"))
 local RouteMath = require(shared:WaitForChild("RouteMath"))
 local TuningSchema = require(shared:WaitForChild("TuningSchema"))
 
@@ -136,6 +137,41 @@ local function checkFunTest()
 	assert(session and session.runVariant, "Live session has no run variation card")
 	assert(session.runVariant.cargo.label ~= "", "Run cargo has no player-facing label")
 	assert(session.runVariant.contract.brief ~= "", "Run contract has no player-facing brief")
+
+	--[[
+		Feature detection against the real road, which is the half the headless
+		suite cannot reach: it exercises the thresholds on synthetic geometry
+		with known answers, and this checks those thresholds still describe the
+		route people actually drive.
+
+		The expected values are the hand-measured windows the director used
+		before it read them off the route. If the derivation stops reproducing
+		them, difficulty has quietly moved somewhere else on the road.
+	]]
+	local features = session.route.features
+	assert(features and #features > 0, "The live route detected no features at all")
+	assert(
+		RouteFeatures.countOf(features, RouteFeatures.Kind.Corner) >= 3,
+		"The route has three authored corners; detection found "
+			.. RouteFeatures.countOf(features, RouteFeatures.Kind.Corner)
+	)
+	assert(RouteFeatures.countOf(features, RouteFeatures.Kind.Descent) >= 1, "The long descent was not detected")
+	assert(RouteFeatures.countOf(features, RouteFeatures.Kind.Bridge) >= 1, "The bridge was not detected")
+
+	-- The blind right-hander opened at 0.06 when the window was written by hand.
+	local firstCorner = RouteFeatures.firstOf(features, RouteFeatures.Kind.Corner)
+	assert(firstCorner, "The route reports no first corner for the opener to aim at")
+	assert(
+		firstCorner < 0.2,
+		string.format("The first corner moved to %.3f; the opener fires before it and would now be late", firstCorner)
+	)
+
+	-- Bridge and descent must not land on top of each other, or crosswind and
+	-- mechanical wear stop being distinguishable places on the road.
+	local bridgeStart = RouteFeatures.firstOf(features, RouteFeatures.Kind.Bridge)
+	local descentStart = RouteFeatures.firstOf(features, RouteFeatures.Kind.Descent)
+	assert(bridgeStart and descentStart, "Route is missing a bridge or a descent")
+	assert(descentStart < bridgeStart, "The descent should come before the bridge on this route")
 	local player = Players:GetPlayers()[1]
 	if player and session.phase == "Staging" then
 		local snapshot = session:buildSnapshotFor(player)
