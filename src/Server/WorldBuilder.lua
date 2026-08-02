@@ -13,7 +13,9 @@ local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local LabConfig = require(Shared:WaitForChild("LabConfig"))
+local LabRoute = require(Shared:WaitForChild("LabRoute"))
 local RouteFeatures = require(Shared:WaitForChild("RouteFeatures"))
+local RouteSections = require(Shared:WaitForChild("RouteSections"))
 local RouteMath = require(Shared:WaitForChild("RouteMath"))
 
 local WorldBuilder = {}
@@ -146,144 +148,15 @@ end
 local LAB_TRUCK_RIDE_HEIGHT = 3.2
 local LAB_SIGN_HEIGHT = 5
 
-type RouteNode = {
-	position: Vector3,
-	width: number,
-	surface: string,
-	bankDeg: number,
-	shoulders: boolean,
-}
-
-local function node(position: Vector3, width: number, surface: string, bankDeg: number, shoulders: boolean): RouteNode
-	return { position = position, width = width, surface = surface, bankDeg = bankDeg, shoulders = shoulders }
-end
-
-local function quadratic(a: Vector3, control: Vector3, b: Vector3, t: number): Vector3
-	local inv = 1 - t
-	return a * (inv * inv) + control * (2 * inv * t) + b * (t * t)
-end
+type RouteNode = RouteSections.RouteNode
 
 --[[
-	The route is about 3,900 studs, which is roughly two to three minutes of
-	driving once corners, recoveries and stops are accounted for.
-
-	That is shorter than the five to eight minutes the brief asked for, and the
-	trade is deliberate: a run that reliably produces the designed cascade and
-	then a second emergent one, and can be repeated twenty times in a session,
-	is worth more during validation than a padded one. Lengthening it later is a
-	matter of adding nodes to this list.
+	The road itself lives in Shared/LabRoute as data, and Shared/RouteSections
+	turns it into nodes. It used to be authored here, which meant the geometry
+	of the game's only level could not be checked without Studio running.
 ]]
-local LAB_CORNER_Z = 420
-
 local function buildLabNodes(): { RouteNode }
-	local nodes: { RouteNode } = {}
-
-	local function straight(position: Vector3, width: number, surface: string, bank: number, shoulders: boolean)
-		table.insert(nodes, node(position, width, surface, bank, shoulders))
-	end
-
-	local function curve(control: Vector3, target: Vector3, width: number, bank: number, steps: number)
-		local from = nodes[#nodes].position
-		local startWidth = nodes[#nodes].width
-		for step = 1, steps do
-			local alpha = step / steps
-			local smooth = alpha * alpha * (3 - 2 * alpha)
-			local curveWidth = startWidth + (width - startWidth) * smooth
-			-- Camber eases in and out instead of changing the collision normal by
-			-- three degrees at each end of every authored curve.
-			local curveBank = bank * math.sin(math.pi * alpha)
-			table.insert(nodes, node(quadratic(from, control, target, alpha), curveWidth, "Road", curveBank, true))
-		end
-	end
-
-	-- Ease a mostly-forward lane change and its grade together. Linear X here
-	-- made the bridge exit turn almost eighteen degrees at a single collision
-	-- seam even though the following points looked visually gradual.
-	local function easedTurn(target: Vector3, width: number, surface: string, steps: number)
-		local fromNode = nodes[#nodes]
-		local from = fromNode.position
-		for step = 1, steps do
-			local alpha = step / steps
-			local smooth = alpha * alpha * (3 - 2 * alpha)
-			local position = Vector3.new(
-				from.X + (target.X - from.X) * smooth,
-				from.Y + (target.Y - from.Y) * smooth,
-				from.Z + (target.Z - from.Z) * alpha
-			)
-			local turnWidth = fromNode.width + (width - fromNode.width) * smooth
-			table.insert(nodes, node(position, turnWidth, surface, 0, true))
-		end
-	end
-
-	-- Road width ramps down over the run. Early sections are deliberately wide
-	-- so a crew learns throttle and load shift with room to recover; the
-	-- current tight widths are the late-run target, not the opening lane.
-	--
-	--   ~0-17%   44 → 36   warm-up and blind corner
-	--   ~17-40%  38 → 32   breather and staged descent
-	--   ~40-60%  32 → 28   rough and left bend
-	--   ~60%+    13 bridge, 26-28 S-bends, endgame (unchanged intent)
-
-	-- 1. Warm-up straight. Long enough to find the throttle, the brake, and the
-	--    fact that the load moves when you use either.
-	straight(Vector3.new(0, 0, 0), 44, "Road", 0, true)
-	straight(Vector3.new(0, 0, LAB_CORNER_Z), 44, "Road", 0, true)
-
-	-- 2. The blind right-hander, cambered the wrong way so the load wants to go
-	--    outboard exactly when the driver is already committed.
-	curve(Vector3.new(0, -2, 570), Vector3.new(150, -6, 604), 36, -6, 16)
-
-	-- 3. Breather, and the last flat road for a while.
-	straight(Vector3.new(430, -12, 644), 38, "Road", 0, true)
-
-	-- 4. Long descent in three stages. Same horizontal span as before, but the
-	--    lane narrows as speed and stakes build toward the rough section.
-	straight(Vector3.new(637, -38, 683), 38, "Road", 0, true)
-	straight(Vector3.new(843, -77, 723), 34, "Road", 0, true)
-	straight(Vector3.new(950, -96, 744), 34, "Road", 0, true)
-	straight(Vector3.new(1050, -110, 762), 32, "Road", 0, true)
-	straight(Vector3.new(1160, -121, 786), 32, "Rough", 0, true)
-
-	-- 5. Broken surface. Bumps do the work, not a failure event.
-	straight(Vector3.new(1320, -128, 822), 32, "Rough", 0, true)
-	straight(Vector3.new(1560, -132, 900), 30, "Rough", 0, true)
-
-	-- 6. Left-hander, so a crew that spent the whole first half braced on one
-	--    side of the bed is now on the wrong side.
-	curve(Vector3.new(1700, -134, 948), Vector3.new(1700, -136, 1120), 28, 5, 12)
-
-	-- 7. Bridge. No shoulders, no rails, no second chance.
-	straight(Vector3.new(1700, -136, 1150), 28, "Road", 0, true)
-	straight(Vector3.new(1700, -136, 1164), 24, "Road", 0, true)
-	straight(Vector3.new(1700, -136, 1176), 19, "Road", 0, true)
-	straight(Vector3.new(1700, -136, 1190), 13, "Bridge", 0, false)
-	straight(Vector3.new(1700, -136, 1444), 13, "Bridge", 0, false)
-
-	-- 8. Climb out, which is where a dragging load really costs you.
-	straight(Vector3.new(1700, -136, 1458), 18, "Road", 0, false)
-	straight(Vector3.new(1700, -136, 1472), 24, "Road", 0, true)
-	straight(Vector3.new(1700, -136, 1490), 30, "Road", 0, true)
-	easedTurn(Vector3.new(1622, -102, 1700), 30, "Road", 10)
-
-	-- 9. S-bends. Two direction changes in a row is the cheapest way to make an
-	--    already-shifted load into a second crisis.
-	curve(Vector3.new(1600, -94, 1822), Vector3.new(1784, -88, 1902), 28, -5, 12)
-	curve(Vector3.new(1962, -82, 1982), Vector3.new(1962, -76, 2122), 26, 5, 12)
-
-	-- 10. Rough descent to finish, taken with whatever is left.
-	straight(Vector3.new(1962, -79.7, 2174), 26, "Rough", 0, true)
-	straight(Vector3.new(1962, -88.7, 2226), 27, "Rough", 0, true)
-	straight(Vector3.new(1962, -99.3, 2278), 27, "Rough", 0, true)
-	straight(Vector3.new(1962, -108.3, 2330), 28, "Rough", 0, true)
-	straight(Vector3.new(1962, -112, 2382), 28, "Rough", 0, true)
-
-	-- 11. Run-in to the depot.
-	straight(Vector3.new(1962, -111.1, 2441.5), 28, "Road", 0, true)
-	straight(Vector3.new(1962, -109, 2501), 29, "Road", 0, true)
-	straight(Vector3.new(1962, -106.9, 2560.5), 30, "Road", 0, true)
-	straight(Vector3.new(1962, -106, 2620), 30, "Road", 0, true)
-
-	return nodes
+	return LabRoute.nodes()
 end
 
 local function buildRoadSegment(folder: Folder, dressing: Folder, from: RouteNode, to: RouteNode, segmentIndex: number)
@@ -607,21 +480,7 @@ function WorldBuilder.buildLabRoute(): LabRouteInfo
 		buildRoadSegment(root, dressing, nodes[index], nodes[index + 1], index)
 	end
 
-	local points: { Vector3 } = {}
-	local cumulative: { number } = {}
-	-- Carried out of the node list so the route can find its own bridges.
-	local surfaces: { string } = {}
-	local total = 0
-	for index, entry in nodes do
-		points[index] = entry.position
-		surfaces[index] = entry.surface
-		if index == 1 then
-			cumulative[index] = 0
-		else
-			total += (entry.position - nodes[index - 1].position).Magnitude
-			cumulative[index] = total
-		end
-	end
+	local points, cumulative, surfaces, total = RouteSections.measure(nodes)
 
 	local deliveryPosition = nodes[#nodes].position
 
@@ -660,7 +519,7 @@ function WorldBuilder.buildLabRoute(): LabRouteInfo
 		Color3.fromRGB(62, 108, 168)
 	)
 
-	local cornerPosition = Vector3.new(0, 0, LAB_CORNER_Z)
+	local cornerPosition = LabRoute.CornerPosition
 	makePostedSign(
 		root,
 		CFrame.new(cornerPosition + Vector3.new(-24, 5.5, -40)) * CFrame.Angles(0, math.rad(35), 0),
@@ -692,7 +551,7 @@ function WorldBuilder.buildLabRoute(): LabRouteInfo
 			these, and a second route gets the right weighting for free because
 			nobody has to remember to describe it.
 		]]
-		features = RouteFeatures.detect(points, cumulative, surfaces, math.max(total, 1)),
+		features = RouteFeatures.detect(points, cumulative, surfaces, total),
 		landmarks = {},
 		swapGates = {},
 		swapSigns = swapSigns,
@@ -737,7 +596,7 @@ function WorldBuilder.buildLabRoute(): LabRouteInfo
 	]]
 	local markers: { { name: string, at: Vector3 } } = {
 		{ name = "Start", at = nodes[1].position },
-		{ name = "CornerApproach", at = Vector3.new(0, 0, LAB_CORNER_Z - 130) },
+		{ name = "CornerApproach", at = LabRoute.CornerPosition - Vector3.new(0, 0, 130) },
 		{ name = "BlindRight", at = cornerPosition },
 		{ name = "Descent", at = Vector3.new(430, -12, 644) },
 		{ name = "Rough", at = Vector3.new(1320, -128, 822) },

@@ -112,8 +112,12 @@ local LabConfig = {
 	CameraFollowRate = 18,
 	CameraVerticalFollowRate = 7,
 	CameraHeadingFollowRate = 14,
-	CameraLeadSeconds = 0.1,
-	CameraMotionStaleSeconds = 0.25,
+	-- The server publishes motion at 20 Hz. Dead-reckon through two dropped
+	-- packets, then reconcile continuously instead of moving the camera target
+	-- in replication-sized steps.
+	CameraLeadSeconds = 0.18,
+	CameraMotionStaleSeconds = 0.35,
+	CameraMotionCorrectionRate = 9,
 	CameraSnapDistance = 90,
 	CameraShakeSpeedStart = 12,
 	CameraShakeSpeedFull = 56,
@@ -134,6 +138,8 @@ local LabConfig = {
 	CameraImpactTranslation = 0.24,
 	CameraImpactRotationDeg = 1.1,
 	CameraImpactDecay = 5.5,
+	CameraImpactMinRise = 18,
+	CameraImpactRetriggerSeconds = 0.18,
 
 	-- ------------------------------------------------------------ surfaces
 	-- gripScale, rollingResistance (studs/s^2)

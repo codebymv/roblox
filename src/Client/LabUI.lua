@@ -2320,7 +2320,10 @@ local lastReplicatedPos: Vector3? = nil
 local smoothedCameraPos: Vector3? = nil
 local smoothedCameraFocus: Vector3? = nil
 local smoothedCameraForward: Vector3? = nil
+local smoothedMotionPosition: Vector3? = nil
 local lastMotionTime = 0
+local lastMotionAcceleration = 0
+local lastImpactKickAt = 0
 local cameraShakeIntensity = 0
 local cameraImpactKick = 0
 
@@ -2352,6 +2355,10 @@ local function bindCamera()
 				smoothedCameraPos = nil
 				smoothedCameraFocus = nil
 				smoothedCameraForward = nil
+				smoothedMotionPosition = nil
+				lastMotionTime = 0
+				lastMotionAcceleration = 0
+				lastImpactKickAt = 0
 				cameraShakeIntensity = 0
 				cameraImpactKick = 0
 			end
@@ -2362,10 +2369,10 @@ local function bindCamera()
 		chassisMissingFor = 0
 		camera.CameraType = Enum.CameraType.Scriptable
 
-		-- Anchor the camera to the same interpolated transform Roblox renders for
-		-- the truck. LabMotion is deliberately limited to feedback signals; using
-		-- its extrapolated position here makes the visible truck skip against the
-		-- camera whenever the two interpolation timelines disagree.
+		-- The chassis is server-owned, so neither CFrame nor GetRenderCFrame is a
+		-- frame-rate motion source on every client. Dead-reckon the timestamped
+		-- server sample, then ease packet corrections into one continuous anchor.
+		-- The rendered frame remains the fallback and teleport detector.
 		local motion = if latest and latest.phase ~= "Result"
 			then LabMotionState.resolve(
 				Workspace:GetServerTimeNow(),
@@ -2390,8 +2397,27 @@ local function bindCamera()
 		local suspensionEnergy = 0
 		local gradeDeg = 0
 		if motion then
+			local motionPosition = motion.position
+			local reconciledPosition: Vector3
+			if
+				teleported
+				or not smoothedMotionPosition
+				or (motionPosition - smoothedMotionPosition).Magnitude > LabConfig.CameraSnapDistance
+			then
+				reconciledPosition = motionPosition
+			else
+				local correctionAlpha = PresentationMath.alpha(LabConfig.CameraMotionCorrectionRate, dt)
+				reconciledPosition = smoothedMotionPosition:Lerp(motionPosition, correctionAlpha)
+			end
+			smoothedMotionPosition = reconciledPosition
+			targetPosition = reconciledPosition
+			flat = motion.forward
 			suspensionEnergy = motion.suspensionEnergy
 			gradeDeg = math.deg(motion.sample.pitch)
+		elseif smoothedMotionPosition then
+			-- A genuinely stale stream falls back without carrying an old prediction
+			-- into the next run. Camera follow still absorbs the small handoff.
+			smoothedMotionPosition = nil
 		end
 
 		local targetFocus = targetPosition + Vector3.new(0, 3, 0)
@@ -2442,8 +2468,20 @@ local function bindCamera()
 		if motion and motion.sample.t ~= lastMotionTime then
 			lastMotionTime = motion.sample.t
 			if latest and latest.phase == "Run" then
-				cameraImpactKick = math.max(cameraImpactKick, CameraFeedback.impact(motion.acceleration, LabConfig))
+				-- Acceleration can stay above the impact threshold for several 20 Hz
+				-- packets. Re-arming on each one creates a packet-rate sawtooth that
+				-- reads as camera skipping. Only a fresh acceleration edge may kick.
+				local accelerationRise = math.max(0, motion.acceleration - lastMotionAcceleration)
+				local now = os.clock()
+				if
+					accelerationRise >= LabConfig.CameraImpactMinRise
+					and now - lastImpactKickAt >= LabConfig.CameraImpactRetriggerSeconds
+				then
+					cameraImpactKick = math.max(cameraImpactKick, CameraFeedback.impact(motion.acceleration, LabConfig))
+					lastImpactKickAt = now
+				end
 			end
+			lastMotionAcceleration = motion.acceleration
 		end
 		cameraImpactKick *= math.exp(-LabConfig.CameraImpactDecay * dt)
 

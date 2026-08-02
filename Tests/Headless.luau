@@ -53,15 +53,60 @@ local ENVIRONMENT = {
 -- handle on the constructors it uses to build test fixtures.
 local Vector3 = roblox.Vector3
 
+--[[
+	Shared modules may require their siblings.
+
+	The boundary this file holds is that nothing here may reach the DataModel.
+	A Shared module requiring another Shared module does not: it is a plain
+	dependency between two engine-free files, and forbidding it was pushing
+	composition out of the tested half of the codebase. LabRoute describing the
+	road in terms of RouteSections' step kinds is exactly the shape that should
+	be encouraged.
+
+	So `script.Parent.Name` resolves to a marker and `require` turns markers
+	back into loaded modules, cached, which is enough to emulate sibling
+	requires without emulating a DataModel. Anything reaching further -- a
+	service, an Instance, a module outside Shared -- still fails with a nil
+	global, which is the boundary that matters.
+]]
+local loaded: { [string]: any } = {}
+local loading: { [string]: boolean } = {}
+
+local siblings = setmetatable({}, {
+	__index = function(_, key: string)
+		return { __sharedModule = key }
+	end,
+})
+
 local function loadShared(name: string)
+	if loaded[name] ~= nil then
+		return loaded[name]
+	end
+	assert(not loading[name], "Circular require between Shared modules at: " .. name)
+	loading[name] = true
+
 	local path = "src/Shared/" .. name .. ".lua"
 	assert(fs.isFile(path), "Cannot find " .. path .. " -- run this from the repository root")
+
+	local environment = table.clone(ENVIRONMENT)
+	environment.script = { Parent = siblings }
+	environment.require = function(target: any)
+		assert(
+			typeof(target) == "table" and target.__sharedModule,
+			"Headless modules may only require siblings in src/Shared"
+		)
+		return loadShared(target.__sharedModule)
+	end
+
 	local chunk = luau.load(fs.readFile(path), {
 		debugName = name,
-		environment = ENVIRONMENT,
+		environment = environment,
 		injectGlobals = true,
 	})
-	return chunk()
+	local result = chunk()
+	loading[name] = false
+	loaded[name] = result
+	return result
 end
 
 local LabConfig = loadShared("LabConfig")
@@ -80,7 +125,9 @@ local LabProgression = loadShared("LabProgression")
 local LabRespawnPolicy = loadShared("LabRespawnPolicy")
 local LabRigPolicy = loadShared("LabRigPolicy")
 local RunVariants = loadShared("RunVariants")
+local LabRoute = loadShared("LabRoute")
 local RouteFeatures = loadShared("RouteFeatures")
+local RouteSections = loadShared("RouteSections")
 local RouteMath = loadShared("RouteMath")
 local RunCauses = loadShared("RunCauses")
 local TokenBucket = loadShared("TokenBucket")
@@ -601,6 +648,107 @@ check("every record the result screen can announce has words", function()
 	for key in records do
 		assert(Achievements.RecordLabel[key], "Record " .. key .. " has no label for the result screen")
 	end
+end)
+
+-- ---------------------------------------------------------------- the road
+
+--[[
+	The road the game is actually played on, checked without Studio.
+
+	Until the plan became data this was impossible: the geometry lived inside an
+	engine module, so the only level in the game was the least testable thing in
+	the repository. The route's own shape decides where every corner, descent
+	and bridge is, and therefore where difficulty lands.
+]]
+check("route one builds and measures the road it always did", function()
+	local nodes = LabRoute.nodes()
+	assert(#nodes > 40, "The route collapsed to " .. #nodes .. " nodes")
+
+	local points, cumulative, surfaces, total = RouteSections.measure(nodes)
+	assert(#points == #nodes, "Measurement lost nodes")
+	assert(#surfaces == #nodes, "Measurement lost surfaces")
+
+	-- Roughly 3,900 studs, which is what the route was authored and tuned to.
+	-- A wide band, because this guards against a section going missing rather
+	-- than against a deliberate reshaping.
+	assert(total > 3400 and total < 4400, string.format("Route length moved to %d studs", total))
+
+	-- Arc length only ever increases, and the last node is the far end.
+	for index = 2, #cumulative do
+		assert(cumulative[index] > cumulative[index - 1], "Arc length went backwards at node " .. index)
+	end
+	assert(math.abs(cumulative[#cumulative] - total) < 1e-6, "The last node is not at the end of the route")
+end)
+
+check("the road still has the features difficulty is placed against", function()
+	local nodes = LabRoute.nodes()
+	local points, cumulative, surfaces, total = RouteSections.measure(nodes)
+	local features = RouteFeatures.detect(points, cumulative, surfaces, total)
+
+	assert(
+		RouteFeatures.countOf(features, "Corner") >= 3,
+		"Three corners were authored; detection found " .. RouteFeatures.countOf(features, "Corner")
+	)
+	assert(RouteFeatures.countOf(features, "Descent") >= 1, "The long descent was not detected")
+	assert(RouteFeatures.countOf(features, "Bridge") >= 1, "The bridge was not detected")
+
+	--[[
+		The blind right-hander opened at 0.06 when the director's windows were
+		written by hand. If detection stops finding it there, the scripted opener
+		fires somewhere else on the road and the first crisis stops being the one
+		the route was built around.
+	]]
+	local firstCorner = RouteFeatures.firstOf(features, "Corner")
+	assert(firstCorner and firstCorner < 0.2, "The first corner moved away from the start of the route")
+
+	local descent = RouteFeatures.firstOf(features, "Descent")
+	local bridge = RouteFeatures.firstOf(features, "Bridge")
+	assert(descent and bridge and descent < bridge, "The descent no longer comes before the bridge")
+end)
+
+check("the road narrows as it goes, and the bridge is its tightest point", function()
+	local nodes = LabRoute.nodes()
+	local opening = nodes[1].width
+	local narrowest = math.huge
+	local narrowestSurface = ""
+	for _, entry in nodes do
+		assert(entry.width > 0, "A node has no width")
+		if entry.width < narrowest then
+			narrowest = entry.width
+			narrowestSurface = entry.surface
+		end
+	end
+
+	assert(opening > narrowest, "The road does not narrow at all")
+	-- The bridge is meant to be the moment with no room. If something else gets
+	-- tighter, the hardest place on the road moved without anyone deciding to.
+	assert(narrowestSurface == "Bridge", "The tightest part of the road is " .. narrowestSurface .. ", not the bridge")
+end)
+
+check("only the bridge goes without shoulders", function()
+	for _, entry in LabRoute.nodes() do
+		if not entry.shoulders then
+			assert(
+				entry.surface == "Bridge" or entry.width <= 24,
+				"A wide road section lost its shoulders: " .. entry.surface
+			)
+		end
+	end
+end)
+
+check("a route plan must start somewhere", function()
+	assert(#RouteSections.build({}) == 0, "An empty plan produced nodes")
+	local ok = pcall(function()
+		return RouteSections.build({
+			{ kind = RouteSections.Kind.Curve, at = Vector3.new(0, 0, 10), width = 20 },
+		})
+	end)
+	assert(not ok, "A plan opening with a curve was accepted, but a curve has nothing to curve from")
+
+	local unknown = pcall(function()
+		return RouteSections.build({ { kind = "Loop", at = Vector3.new(0, 0, 0), width = 20 } })
+	end)
+	assert(not unknown, "An unknown step kind was silently ignored")
 end)
 
 -- ------------------------------------------------------------ route features
