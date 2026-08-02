@@ -56,9 +56,25 @@ export type Finish = {
 	premium: boolean,
 	-- Named rather than an Enum so this module stays loadable without Roblox.
 	material: string,
-	-- Multiplies the equipped paint colour rather than replacing it, so a
-	-- finish reads as a treatment of a colour the player chose.
+	--[[
+		Multiplies the equipped paint colour rather than replacing it, so a
+		finish reads as a treatment of a colour the player chose.
+
+		Unless the finish overrides. Solid Gold is gold -- that is its entire
+		premise -- and a texture with gold baked into it cannot be tinted back
+		to anything else, because multiplying only ever darkens. Declaring the
+		exception keeps it a decision rather than an accident of how saturated
+		some texture happened to be.
+
+		A premium finish may never override. Money must not erase a choice the
+		player made; an earned top-tier item is allowed to be that loud.
+	]]
 	tint: Color3,
+	overridesPaint: boolean,
+	-- Roblox asset id for a MaterialVariant colour map. Zero means the finish
+	-- renders from material and reflectance alone, which every one of them did
+	-- before any texture existed.
+	textureId: number,
 	reflectance: number,
 	-- Client-side colour cycle, for the one finish that cannot be a static
 	-- material without an uploaded texture.
@@ -98,6 +114,8 @@ local FINISHES: { Finish } = {
 		premium = false,
 		material = "SmoothPlastic",
 		tint = Color3.fromRGB(255, 255, 255),
+		overridesPaint = false,
+		textureId = 0,
 		reflectance = 0,
 		cycles = false,
 	},
@@ -109,6 +127,8 @@ local FINISHES: { Finish } = {
 		premium = false,
 		material = "SmoothPlastic",
 		tint = Color3.fromRGB(255, 255, 255),
+		overridesPaint = false,
+		textureId = 0,
 		reflectance = 0.22,
 		cycles = false,
 	},
@@ -120,6 +140,8 @@ local FINISHES: { Finish } = {
 		premium = false,
 		material = "DiamondPlate",
 		tint = Color3.fromRGB(140, 144, 150),
+		overridesPaint = false,
+		textureId = 0,
 		reflectance = 0.1,
 		cycles = false,
 	},
@@ -131,6 +153,8 @@ local FINISHES: { Finish } = {
 		premium = false,
 		material = "Metal",
 		tint = Color3.fromRGB(228, 232, 238),
+		overridesPaint = false,
+		textureId = 0,
 		reflectance = 0.55,
 		cycles = false,
 	},
@@ -141,7 +165,15 @@ local FINISHES: { Finish } = {
 		cost = 4500,
 		premium = false,
 		material = "Metal",
-		tint = Color3.fromRGB(255, 205, 90),
+		--[[
+			White, because the colour lives in the texture. Tinting a gold albedo
+			would apply gold twice. Until the texture id is set this renders as
+			plain metal in the player's own paint, which is a duller Solid Gold
+			but not a broken one.
+		]]
+		tint = Color3.fromRGB(255, 255, 255),
+		overridesPaint = true,
+		textureId = 0,
 		reflectance = 0.45,
 		cycles = false,
 	},
@@ -159,6 +191,11 @@ local FINISHES: { Finish } = {
 		premium = true,
 		material = "Neon",
 		tint = Color3.fromRGB(255, 255, 255),
+		-- Never true. The premium finish shifts the player's colour rather than
+		-- replacing it, which is also why it needs no texture and cannot be
+		-- taken away by a moderation pass.
+		overridesPaint = false,
+		textureId = 0,
 		reflectance = 0.3,
 		cycles = true,
 	},

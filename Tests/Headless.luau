@@ -52,6 +52,7 @@ local ENVIRONMENT = {
 -- The environment above belongs to the loaded modules; this file needs its own
 -- handle on the constructors it uses to build test fixtures.
 local Vector3 = roblox.Vector3
+local Color3 = roblox.Color3
 
 --[[
 	Shared modules may require their siblings.
@@ -116,6 +117,7 @@ local Achievements = loadShared("Achievements")
 local AudioMix = loadShared("AudioMix")
 local Commerce = loadShared("Commerce")
 local Cosmetics = loadShared("Cosmetics")
+local LiveryShapes = loadShared("LiveryShapes")
 local DailyContract = loadShared("DailyContract")
 local ImpactTiers = loadShared("ImpactTiers")
 local VfxSpec = loadShared("VfxSpec")
@@ -1147,6 +1149,87 @@ check("every daily is worth taking a detour for", function()
 end)
 
 -- --------------------------------------------------------------- collection
+
+--[[
+	The rule the paid tier rests on: money changes how a shape looks, never
+	which shapes exist, and never erases a colour the player chose. An earned
+	top-tier item is allowed to be that loud; a bought one is not.
+]]
+check("the premium finish never overrides the player's paint", function()
+	for _, finish in Cosmetics.Finishes do
+		if finish.premium then
+			assert(not finish.overridesPaint, finish.id .. " is paid for and erases the player's colour")
+			-- It also must not depend on an upload, or a moderation pass can take
+			-- away something somebody paid for.
+			assert(finish.textureId == 0, finish.id .. " is paid for and depends on an uploaded asset")
+		end
+	end
+
+	-- Overriding is allowed, but only deliberately and only once: if half the
+	-- catalogue ignores the paint, the paint stops being a choice.
+	local overriding = 0
+	for _, finish in Cosmetics.Finishes do
+		if finish.overridesPaint then
+			overriding += 1
+			assert(
+				finish.tint == Color3.fromRGB(255, 255, 255),
+				finish.id .. " overrides the paint and also tints it, which applies its colour twice"
+			)
+		end
+	end
+	assert(overriding <= 1, "More than one finish ignores the player's paint")
+end)
+
+check("every livery has shapes, and every shape sits on the cab", function()
+	for _, livery in Cosmetics.Liveries do
+		assert(LiveryShapes.has(livery.id), livery.id .. " has no shape table")
+
+		local shapes = LiveryShapes.forLivery(livery.id)
+		if livery.id ~= Cosmetics.DefaultLivery then
+			assert(#shapes > 0, livery.id .. " is not the default and yet paints nothing")
+		end
+
+		for index, shape in shapes do
+			local where = string.format("%s shape %d", livery.id, index)
+			assert(shape.size.X > 0 and shape.size.Y > 0 and shape.size.Z > 0, where .. " has no size")
+			assert(shape.size.X < 0.3, where .. " is too thick to be a livery rather than a box")
+			assert(shape.shade > 0, where .. " would be black regardless of paint")
+			assert(LiveryShapes.fitsOnCab(shape), where .. " hangs off the bodywork")
+		end
+	end
+
+	-- The default is the truck with nothing on it, which is a livery and not a
+	-- missing one.
+	assert(#LiveryShapes.forLivery(Cosmetics.DefaultLivery) == 0, "The default livery paints something")
+	assert(#LiveryShapes.forLivery("NotALivery") == 0, "An unknown livery fell back to something visible")
+	assert(#LiveryShapes.forLivery(nil) == 0, "A missing livery fell back to something visible")
+end)
+
+--[[
+	Colour is a shade of the equipped paint, never a colour of its own. That is
+	what stops fifty-four combinations from containing ugly ones -- a livery
+	cannot clash with a paint it was never designed against.
+]]
+check("no livery carries a colour of its own", function()
+	for _, id in LiveryShapes.ids() do
+		for index, shape in LiveryShapes.forLivery(id) do
+			assert((shape :: any).color == nil, string.format("%s shape %d sets its own colour", id, index))
+			-- Wide enough to read against the paint, narrow enough to stay the
+			-- same paint.
+			assert(shape.shade >= 0.2 and shape.shade <= 2.2, string.format("%s shape %d is not a shade", id, index))
+		end
+	end
+end)
+
+check("the shape table and the ladder describe the same set", function()
+	local ladder = {}
+	for _, livery in Cosmetics.Liveries do
+		ladder[livery.id] = true
+	end
+	for _, id in LiveryShapes.ids() do
+		assert(ladder[id], "Shapes exist for " .. id .. ", which is not on the ladder")
+	end
+end)
 
 --[[
 	The rule the whole two-axis design rests on: money changes how a shape
