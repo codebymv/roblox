@@ -33,8 +33,8 @@ function TruckLab.init()
 	Net.ensureServer()
 	TuningService.init()
 
-	local route = WorldBuilder.buildLabRoute()
-	session = LabSession.new({ route = route })
+	local routes = WorldBuilder.buildLabWorld()
+	session = LabSession.new({ routes = routes })
 	session:start()
 
 	DevCommands.init({

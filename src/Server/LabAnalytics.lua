@@ -317,6 +317,19 @@ function LabAnalytics:dailyCompleted(player: Player, objective)
 	})
 end
 
+--[[
+	Reaching a new leg. The single clearest signal that the ladder is doing its
+	job: a cohort that never sees leg two is telling you the first road is
+	either too hard or not worth repeating.
+]]
+function LabAnalytics:legReached(crew: { Player }, legIndex: number, legId: string)
+	for _, player in crew do
+		self:_custom(player, "CargoLegReached", legIndex, {
+			[Enum.AnalyticsCustomFieldKeys.CustomField01.Name] = "Leg - " .. legId,
+		})
+	end
+end
+
 function LabAnalytics:shouldAskForFeedback(player: Player): boolean
 	local state = self.players[player.UserId]
 	return state ~= nil and state.runsFinished >= 1 and state.feedback == nil

@@ -158,6 +158,12 @@ export type LabSnapshot = {
 	swapNextRole: LabRole?,
 	swapNextStation: StrapId?,
 
+	-- Which leg of the ladder this is, and the road it is run on. Arriving
+	-- climbs a rung; losing the truck drops the crew back to the first.
+	legIndex: number,
+	legCount: number,
+	legLabel: string,
+
 	-- The card this delivery is running under.
 	cargoLabel: string,
 	cargoDescription: string,

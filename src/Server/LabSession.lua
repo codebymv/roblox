@@ -31,6 +31,7 @@ local LabTypes = require(Shared:WaitForChild("LabTypes"))
 local Net = require(Shared:WaitForChild("Net"))
 local RunCauses = require(Shared:WaitForChild("RunCauses"))
 local DailyContract = require(Shared:WaitForChild("DailyContract"))
+local LabRoute = require(Shared:WaitForChild("LabRoute"))
 local RunVariants = require(Shared:WaitForChild("RunVariants"))
 
 local CargoLoad = require(script.Parent.CargoLoad)
@@ -72,14 +73,21 @@ local LabSession = {}
 LabSession.__index = LabSession
 
 export type Config = {
-	route: WorldBuilder.LabRouteInfo,
+	-- Every authored leg, in ladder order. The session stands the rig on one of
+	-- them at a time and moves it when a crew climbs or falls.
+	routes: { WorldBuilder.LabRouteInfo },
 }
 
 function LabSession.new(config: Config)
-	assert(config and config.route, "LabSession requires a route")
+	assert(config and config.routes and #config.routes > 0, "LabSession requires at least one route")
 
 	local self = setmetatable({
-		route = config.route,
+		routes = config.routes,
+		route = config.routes[1],
+		legIndex = 1,
+		-- Set when a finished run changes the leg, so staging knows to move the
+		-- rig before it rebuilds anything on it.
+		pendingLeg = nil :: number?,
 
 		phase = "Staging",
 		phaseClock = 0,
@@ -240,6 +248,45 @@ end
 	are read once while parts are being created -- sizes, densities, mount
 	offsets -- which a live attribute edit cannot reach.
 ]]
+--[[
+	Stand the rig on a different leg.
+
+	Both roads are already built and standing, so this is a rebuild at a new
+	start rather than a world change: the rig is torn down and put back up at
+	the new route's start line, and the pressure director is rebuilt with that
+	route's features so difficulty lands on the new road's corners rather than
+	the old one's.
+
+	Returns whether anything moved, so staging can announce a change and stay
+	quiet about a repeat.
+]]
+function LabSession:_setLeg(leg: number): boolean
+	local clamped = math.clamp(math.floor(leg or 1), 1, #self.routes)
+	local target = self.routes[clamped]
+	if not target or target == self.route then
+		self.legIndex = clamped
+		return false
+	end
+
+	WorldBuilder.setRouteActive(self.route, false)
+	self.legIndex = clamped
+	self.route = target
+	WorldBuilder.setRouteActive(target, true)
+
+	self:_destroyRig()
+	self:_buildRig()
+	self.swapGateIndex = 1
+	self.swapWarningGate = nil
+	self.swapHandoffUntil = 0
+	table.clear(self.announcedLandmarks)
+	self.telemetry:log("leg_change", target.id)
+	return true
+end
+
+function LabSession:currentLeg(): number
+	return self.legIndex
+end
+
 function LabSession:rebuildRig(): string
 	self:_destroyRig()
 	self:_buildRig()
@@ -398,6 +445,9 @@ function LabSession:_buildSharedSnapshot()
 		crew = if self.stations then self.stations:snapshot() else {},
 		crewCount = crewCount,
 		crewCapacity = LabConfig.MaxCrew,
+		legIndex = self.legIndex,
+		legCount = #self.routes,
+		legLabel = self.route.label,
 		cargoLabel = runVariant.cargo.label,
 		cargoDescription = runVariant.cargo.description,
 		contractLabel = runVariant.contract.label,
@@ -856,6 +906,12 @@ function LabSession:enterStaging()
 	end
 	self.stagingBusy = true
 
+	-- Before the board resolves or the rig resets, because both are built
+	-- against whichever road the session is standing on.
+	local pendingLeg = self.pendingLeg
+	self.pendingLeg = nil
+	self.legChanged = pendingLeg ~= nil and self:_setLeg(pendingLeg)
+
 	local nextRunNumber = self.runIndex + 1
 	--[[
 		A wreck is not a trustworthy assembly to recycle. Its independently
@@ -1072,6 +1128,16 @@ function LabSession:enterRun()
 	if self:_isSolo() then
 		opener ..= " Hold E to work it without leaving the wheel."
 	end
+	--[[
+		A new road is the more important thing on the screen, so it goes first
+		and the cargo brief follows it. Climbing the ladder should feel like
+		arriving somewhere rather than like the same run with different scenery.
+	]]
+	if self.legChanged then
+		self:toast(string.format("LEG %d - %s. %s", self.legIndex, self.route.label, self.route.blurb))
+		self.analytics:legReached(self:_crewPlayers(), self.legIndex, self.route.id)
+		self.legChanged = false
+	end
 	self:toast(opener)
 
 	-- Mirror deferred seat reclaim: Sit / contact can flip ownership a beat later.
@@ -1208,6 +1274,15 @@ function LabSession:enterResult(result: string, saved: boolean)
 	end
 	self.resultDuration = duration
 	self.restartSeconds = duration
+
+	--[[
+		The ladder moves here, where the outcome is known, and is applied at
+		staging, where the rig can be moved without interrupting a run. Arriving
+		climbs a rung; losing the truck drops the crew to the first, which is
+		what makes reaching the second leg something that happened rather than
+		something that unlocked.
+	]]
+	self.pendingLeg = LabRoute.nextLeg(self.legIndex, result)
 
 	self.objective = "Run over."
 end

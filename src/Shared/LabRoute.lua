@@ -275,6 +275,30 @@ function LabRoute.forLeg(leg: number): Route
 	return ROUTES[index]
 end
 
+function LabRoute.legCount(): number
+	return #ROUTES
+end
+
+--[[
+	Where a finished run leaves the ladder.
+
+	Arriving climbs one rung; anything else drops the crew back to the first.
+	Losing the truck losing the whole ladder is the point -- it is what makes
+	reaching the second leg a thing that happened rather than a thing that was
+	unlocked, and it is why the harder road stays worth being nervous about.
+
+	The climb clamps at the last authored leg rather than ending the session,
+	so running out of road is a plateau and not a failure.
+]]
+function LabRoute.nextLeg(currentLeg: number, outcome: string): number
+	local leg = math.max(1, math.floor(currentLeg or 1))
+	local arrived = outcome == "Delivered" or outcome == "PartialLoss"
+	if not arrived then
+		return 1
+	end
+	return math.min(leg + 1, #ROUTES)
+end
+
 function LabRoute.byId(id: string?): Route?
 	for _, route in ROUTES do
 		if route.id == id then

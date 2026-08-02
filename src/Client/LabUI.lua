@@ -1515,11 +1515,20 @@ refresh = function()
 	UIKit.setSize(routeFill, UDim2.fromScale(math.clamp(view.routeProgress, 0, 1), 1))
 	UIKit.setText(routeLabel, string.format("ROUTE %d%%", math.floor(view.routeProgress * 100 + 0.5)))
 	UIKit.setBackground(routeFill, UIKit.Theme.Accent)
+	-- The badge already carries phase and difficulty; the leg goes with them
+	-- because it is the same question -- what am I in the middle of.
 	UIKit.setText(
 		phaseBadge,
 		if swapActive
 			then "SWAP · HANDOFF"
 			elseif swapWarning then "SWAP AHEAD"
+			elseif snap.legCount > 1 then string.format(
+				"%s · LEG %d/%d · %s",
+				badge.text,
+				snap.legIndex,
+				snap.legCount,
+				snap.difficultyLabel
+			)
 			else badge.text .. " · " .. snap.difficultyLabel
 	)
 	UIKit.setTextColor(

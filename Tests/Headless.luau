@@ -752,6 +752,32 @@ check("a route plan must start somewhere", function()
 end)
 
 --[[
+	The ladder. Arriving climbs a rung, anything else drops to the first, and
+	the climb plateaus rather than ending -- running out of authored road should
+	not be a failure state.
+]]
+check("the leg ladder climbs on arrival and resets on a loss", function()
+	assert(LabRoute.nextLeg(1, "Delivered") == 2, "A clean delivery did not advance the leg")
+	assert(LabRoute.nextLeg(1, "PartialLoss") == 2, "Arriving damaged did not advance the leg")
+
+	for _, outcome in { "TruckWrecked", "CargoLost", "TimeExpired", "Abandoned" } do
+		assert(LabRoute.nextLeg(2, outcome) == 1, outcome .. " did not drop the crew to the first leg")
+	end
+
+	-- Losing the truck loses the ladder. That is what makes the second leg a
+	-- thing that happened rather than a thing that unlocked.
+	assert(LabRoute.nextLeg(LabRoute.legCount(), "TruckWrecked") == 1, "A wreck on the last leg kept its progress")
+
+	local last = LabRoute.legCount()
+	assert(LabRoute.nextLeg(last, "Delivered") == last, "The ladder climbed past its last authored leg")
+	assert(LabRoute.forLeg(last + 5).id == LabRoute.forLeg(last).id, "A leg past the end has no road")
+
+	-- A broken or absent leg still resolves to somewhere drivable.
+	assert(LabRoute.nextLeg(0, "Delivered") == 2, "Leg zero did not behave as leg one")
+	assert(LabRoute.forLeg(0).id == LabRoute.Routes[1].id, "Leg zero has no road")
+end)
+
+--[[
 	Every route has to clear the same bar, not just the one that shipped first.
 	A second route is where quality quietly diverges: nothing fails, the level
 	is simply worse, and nobody finds out until a playtest says the snow one is

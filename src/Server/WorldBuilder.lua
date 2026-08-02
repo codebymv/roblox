@@ -150,15 +150,6 @@ local LAB_SIGN_HEIGHT = 5
 
 type RouteNode = RouteSections.RouteNode
 
---[[
-	The road itself lives in Shared/LabRoute as data, and Shared/RouteSections
-	turns it into nodes. It used to be authored here, which meant the geometry
-	of the game's only level could not be checked without Studio running.
-]]
-local function buildLabNodes(): { RouteNode }
-	return LabRoute.nodes()
-end
-
 local function buildRoadSegment(folder: Folder, dressing: Folder, from: RouteNode, to: RouteNode, segmentIndex: number)
 	local delta = to.position - from.position
 	local length = delta.Magnitude
@@ -436,27 +427,25 @@ local function buildRouteDressing(dressing: Folder, route: LabRouteInfo)
 	makeFloodlight(warehouse, route.deliveryPosition + right * 28 + forward * 20)
 end
 
-function WorldBuilder.buildLabRoute(): LabRouteInfo
-	local existing = Workspace:FindFirstChild("CargoLab")
-	if existing then
-		existing:Destroy()
-	end
+--[[
+	One route, into a folder of its own under the shared CargoLab root.
 
-	-- A leftover baseplate sits at y = 0, right where the warm-up straight is,
-	-- and the suspension would happily drive on it. Serving into an existing
-	-- Studio place is the common way to hit this.
-	for _, name in { "Baseplate", "SpawnLocation" } do
-		local stray = Workspace:FindFirstChild(name)
-		if stray and stray:IsA("BasePart") then
-			stray:Destroy()
-		end
-	end
+	Every leg is built once at startup and then left standing. Rebuilding a road
+	on every leg change would stall the server at the exact moment a crew is
+	waiting to set off, and the routes are authored far enough apart in world
+	space that having both is free -- the headless suite asserts they do not
+	overlap.
 
+	The shared root matters: four client modules find the truck by searching
+	Workspace.CargoLab, so the roads may live in separate folders but the
+	folders have to live in one place.
+]]
+local function buildLabRoute(parent: Folder, definition): LabRouteInfo
 	local root = Instance.new("Folder")
-	root.Name = "CargoLab"
-	root.Parent = Workspace
+	root.Name = "Route_" .. definition.id
+	root.Parent = parent
 
-	local nodes = buildLabNodes()
+	local nodes = LabRoute.nodes(definition.id)
 	local dressing = Instance.new("Folder")
 	dressing.Name = "RoadsideDressing"
 	dressing.Parent = root
@@ -519,7 +508,7 @@ function WorldBuilder.buildLabRoute(): LabRouteInfo
 		Color3.fromRGB(62, 108, 168)
 	)
 
-	local cornerPosition = LabRoute.CornerPosition
+	local cornerPosition = definition.cornerPosition
 	makePostedSign(
 		root,
 		CFrame.new(cornerPosition + Vector3.new(-24, 5.5, -40)) * CFrame.Angles(0, math.rad(35), 0),
@@ -532,6 +521,10 @@ function WorldBuilder.buildLabRoute(): LabRouteInfo
 	swapSigns.Parent = root
 
 	local route: LabRouteInfo = {
+		id = definition.id,
+		label = definition.label,
+		blurb = definition.blurb,
+		skin = definition.skin,
 		root = root,
 		points = points,
 		cumulative = cumulative,
@@ -624,6 +617,56 @@ function WorldBuilder.buildLabRoute(): LabRouteInfo
 	WorldBuilder.setSwapSignsVisible(route, false)
 
 	return route
+end
+
+--[[
+	Build the world: one shared root, and every authored leg inside it.
+
+	Returns the routes in leg order. The session holds them all and switches
+	which one the rig is standing on, rather than tearing a road down and
+	putting another up between runs.
+]]
+function WorldBuilder.buildLabWorld(): { LabRouteInfo }
+	local existing = Workspace:FindFirstChild("CargoLab")
+	if existing then
+		existing:Destroy()
+	end
+
+	-- A leftover baseplate sits at y = 0, right where the warm-up straight is,
+	-- and the suspension would happily drive on it. Serving into an existing
+	-- Studio place is the common way to hit this.
+	for _, name in { "Baseplate", "SpawnLocation" } do
+		local stray = Workspace:FindFirstChild(name)
+		if stray and stray:IsA("BasePart") then
+			stray:Destroy()
+		end
+	end
+
+	local root = Instance.new("Folder")
+	root.Name = "CargoLab"
+	root.Parent = Workspace
+
+	local routes: { LabRouteInfo } = {}
+	for index, definition in LabRoute.Routes do
+		local route = buildLabRoute(root, definition)
+		-- Only the leg being driven offers a spawn. Two enabled SpawnLocations
+		-- would drop a respawning player onto whichever road Roblox preferred.
+		WorldBuilder.setRouteActive(route, index == 1)
+		routes[index] = route
+	end
+	return routes
+end
+
+--[[
+	Mark which leg is live. The inactive road stays standing and visible -- it
+	is scenery on the horizon rather than something to hide -- but it stops
+	accepting spawns.
+]]
+function WorldBuilder.setRouteActive(route: LabRouteInfo, active: boolean)
+	local spawn = route.root:FindFirstChild("LabSpawn")
+	if spawn and spawn:IsA("SpawnLocation") then
+		spawn.Enabled = active
+	end
 end
 
 -- SWAP is a multiplayer mechanic. Keep its physical landmark in the route so
